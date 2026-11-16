@@ -88,24 +88,66 @@
                 .slice(0, 120);
         }
 
-        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        // 多路線抓取：優先用你的 Cloudflare Worker，遇 429 或阻擋時自動切換後備通道
+        async function smartFetch(targetUrl, workerUrl) {
+            const encoded = encodeURIComponent(targetUrl);
+            const routes = [
+                `${workerUrl}?url=${encoded}`,
+                `https://api.codetabs.com/v1/proxy?quest=${encoded}`,
+                `https://corsproxy.io/?${encoded}`
+            ];
 
-        // 遇到 429 限流時自動倒數等待並重試
-        async function fetchWithRetry(url, statusEl, stepLabel, maxRetries = 3) {
-            for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                const res = await fetch(url);
-                if (res.status !== 429) {
-                    return res;
-                }
-                if (attempt === maxRetries) {
-                    return res;
-                }
-                const waitSec = attempt * 10; // 第1次等10秒，第2次等20秒
-                for (let s = waitSec; s > 0; s--) {
-                    statusEl.innerText = `⏳ 觸發頻率限制 (429)，${s} 秒後自動重試 (${attempt}/${maxRetries - 1})...\n${stepLabel}`;
-                    await sleep(1000);
-                }
+            let lastRes = null;
+            for (const route of routes) {
+                try {
+                    const res = await fetch(route);
+                    if (res.ok) return res;
+                    lastRes = res;
+                } catch (_) {}
             }
+            if (lastRes) return lastRes;
+            throw new Error('所有連線通道均無法存取目標網址');
+        }
+
+        // 從網頁 HTML 解析出書名與所有原圖網址（繞過 API 限流）
+        function parseGalleryFromHtml(html, code) {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const h1 = doc.querySelector('h1.title');
+            const title = h1 ? h1.textContent.trim() : code;
+
+            // 嘗試讀取網頁內嵌 JSON
+            const jsonMatch = html.match(/window\._gallery\s*=\s*JSON\.parse\("(.+?)"\);/);
+            if (jsonMatch) {
+                try {
+                    const unescaped = JSON.parse(`"${jsonMatch[1]}"`);
+                    const data = JSON.parse(unescaped);
+                    const pages = data.images && data.images.pages ? data.images.pages : [];
+                    if (pages.length > 0) {
+                        const realTitle = (data.title && (data.title.japanese || data.title.english)) || title;
+                        const urls = pages.map((p, idx) => {
+                            const ext = EXT_MAP[p.t] || 'jpg';
+                            const server = IMG_SERVERS[idx % IMG_SERVERS.length];
+                            return `${server}/galleries/${data.media_id}/${idx + 1}.${ext}`;
+                        });
+                        return { title: realTitle, urls };
+                    }
+                } catch (_) {}
+            }
+
+            // 後備：直接從縮圖標籤還原所有原圖網址
+            const thumbs = doc.querySelectorAll('.thumb-container img');
+            const urls = [];
+            thumbs.forEach((img, idx) => {
+                const src = img.getAttribute('data-src') || img.getAttribute('src') || '';
+                const m = src.match(/\/galleries\/(\d+)\/(\d+)t\.(jpg|png|gif|webp)/i);
+                if (m) {
+                    const server = IMG_SERVERS[idx % IMG_SERVERS.length];
+                    urls.push(`${server}/galleries/${m[1]}/${m[2]}.${m[3]}`);
+                }
+            });
+
+            if (urls.length === 0) throw new Error('無法從頁面解析出圖片列表');
+            return { title, urls };
         }
 
         function processImageBlob(blob, isCover) {
@@ -182,24 +224,19 @@
             btn.disabled = true;
             resultBox.style.display = 'none';
             readyFiles = { pdf: null, png: null };
-            status.innerText = '1/3 正在讀取作品資料與書名...';
+            status.innerText = '1/3 正在讀取作品頁面與書名...';
 
             try {
-                // 直接讀取作品資料（省去額外 CDN API 請求）
-                const apiTarget = encodeURIComponent(`https://nhentai.net/api/v2/galleries/${code}`);
-                const metaRes = await fetchWithRetry(`${workerUrl}?url=${apiTarget}`, status, '正在讀取作品資料...');
-                if (!metaRes.ok) {
-                    const errText = await metaRes.text();
-                    throw new Error(`讀取資料失敗 (狀態碼 ${metaRes.status})\n${errText.slice(0, 80)}`);
+                // 直接讀取主頁面 HTML，避開 /api/v2/ 嚴格限流
+                const pageRes = await smartFetch(`https://nhentai.net/g/${code}/`, workerUrl);
+                if (!pageRes.ok) {
+                    throw new Error(`讀取資料失敗 (狀態碼 ${pageRes.status})`);
                 }
-                
-                const data = await metaRes.json();
-                const pages = data.pages || (data.images && data.images.pages) || [];
-                const total = pages.length;
-                if (total === 0) throw new Error('找不到任何頁面資料');
 
-                const rawTitle = (data.title && (data.title.japanese || data.title.english || data.title.pretty)) || code;
-                const safeTitle = sanitizeFilename(rawTitle) || code;
+                const html = await pageRes.text();
+                const { title, urls } = parseGalleryFromHtml(html, code);
+                const total = urls.length;
+                const safeTitle = sanitizeFilename(title) || code;
 
                 const { jsPDF } = window.jspdf;
                 let pdf = null;
@@ -207,22 +244,9 @@
 
                 for (let i = 0; i < total; i++) {
                     const pageNum = i + 1;
-                    const stepText = `2/3 正在下載原圖 (${pageNum} / ${total} 頁)...`;
-                    status.innerText = stepText;
-                    
-                    // 輪流分散使用不同圖片伺服器，減輕單一節點壓力
-                    const cdnBase = IMG_SERVERS[i % IMG_SERVERS.length];
-                    const p = pages[i];
-                    let fullImgUrl = '';
-                    if (p.path) {
-                        fullImgUrl = `${cdnBase}/${p.path.replace(/^\//, '')}`;
-                    } else {
-                        const ext = EXT_MAP[p.t] || 'jpg';
-                        fullImgUrl = `${cdnBase}/galleries/${data.media_id}/${pageNum}.${ext}`;
-                    }
+                    status.innerText = `2/3 正在下載原圖 (${pageNum} / ${total} 頁)...`;
 
-                    const imgTarget = encodeURIComponent(fullImgUrl);
-                    const imgRes = await fetchWithRetry(`${workerUrl}?url=${imgTarget}`, status, stepText);
+                    const imgRes = await smartFetch(urls[i], workerUrl);
                     if (!imgRes.ok) throw new Error(`第 ${pageNum} 頁下載失敗 (狀態碼 ${imgRes.status})`);
 
                     const blob = await imgRes.blob();
@@ -240,9 +264,6 @@
                         pdf.addPage([imgInfo.width, imgInfo.height], orientation);
                     }
                     pdf.addImage(imgInfo.dataUrl, 'JPEG', 0, 0, imgInfo.width, imgInfo.height);
-
-                    // 每頁之間停頓 0.2 秒，避免請求過密觸發 429
-                    if (i < total - 1) await sleep(200);
                 }
 
                 status.innerText = '3/3 正在打包檔案...';
