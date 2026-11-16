@@ -17,7 +17,7 @@
         input[type="number"] { font-size: 1.3rem; text-align: center; letter-spacing: 2px; }
         button.primary { width: 100%; padding: 14px; font-size: 1.05rem; font-weight: bold; border-radius: 10px; border: none; background: #ed2553; color: white; cursor: pointer; }
         button.primary:disabled { background: #555; }
-        #status { margin-top: 1rem; font-size: 0.9rem; color: #aaa; text-align: center; min-height: 1.4rem; line-height: 1.5; word-break: break-word; }
+        #status { margin-top: 1rem; font-size: 0.9rem; color: #aaa; text-align: center; min-height: 1.4rem; line-height: 1.5; word-break: break-word; white-space: pre-line; }
         #settings-panel { display: none; margin-top: 1.2rem; padding-top: 1.2rem; border-top: 1px solid #333; }
         label { display: block; font-size: 0.85rem; color: #bbb; margin-bottom: 6px; }
     </style>
@@ -29,13 +29,13 @@
             <button class="gear-btn" onclick="toggleSettings()">⚙️ 設定中轉站</button>
         </div>
 
-        <input type="number" id="code" placeholder="輸入番號 (例如 177013)" inputmode="numeric">
+        <input type="number" id="code" placeholder="輸入番號 (例如 697515)" inputmode="numeric">
         <button class="primary" id="btn" onclick="startProcess()">下載 PDF ＋ 封面 PNG</button>
         <div id="status">請先按右上角「⚙️ 設定」填入中轉站網址</div>
 
         <div id="settings-panel">
             <label>Cloudflare Worker 中轉站網址</label>
-            <input type="url" id="worker-url" placeholder="https://xxx.xxx.workers.dev">
+            <input type="url" id="worker-url" placeholder="https://tight-brook-0a4c.zeldris12313.workers.dev">
             <button class="primary" style="background:#2ea043;" onclick="saveSettings()">儲存網址</button>
         </div>
     </div>
@@ -58,14 +58,15 @@
 
         function saveSettings() {
             let url = document.getElementById('worker-url').value.trim();
+            if (url && !url.startsWith('http')) url = 'https://' + url;
             if (url.endsWith('/')) url = url.slice(0, -1);
             localStorage.setItem('worker_url', url);
+            document.getElementById('worker-url').value = url;
             alert('✅ 已儲存！');
             document.getElementById('settings-panel').style.display = 'none';
             document.getElementById('status').innerText = '準備就緒，請輸入番號';
         }
 
-        // 過濾檔名中系統唔允許嘅特殊字元，並限制長度避免過長報錯
         function sanitizeFilename(name) {
             return name
                 .replace(/[\/\\?%*:|"<>]/g, '_')
@@ -74,7 +75,6 @@
                 .slice(0, 120);
         }
 
-        // 處理圖片：輸出供 PDF 使用嘅數據，若為第 1 頁則額外生成標準 PNG Blob
         function processImageBlob(blob, isCover) {
             return new Promise((resolve, reject) => {
                 const url = URL.createObjectURL(blob);
@@ -109,7 +109,6 @@
             });
         }
 
-        // 觸發瀏覽器下載檔案
         function triggerDownload(blob, filename) {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -134,19 +133,37 @@
             if (!code) return alert('請輸入番號');
 
             btn.disabled = true;
-            status.innerText = '1/3 正在讀取作品資料與書名...';
+            status.innerText = '1/3 正在連線 API v2 讀取作品資料...';
 
             try {
-                const apiTarget = encodeURIComponent(`https://nhentai.net/api/gallery/${code}`);
+                // 1. 動態取得最新圖片 CDN 伺服器清單
+                let cdnBase = 'https://i.nhentai.net';
+                try {
+                    const cdnTarget = encodeURIComponent('https://nhentai.net/api/v2/cdn');
+                    const cdnRes = await fetch(`${workerUrl}?url=${cdnTarget}`);
+                    if (cdnRes.ok) {
+                        const cdnData = await cdnRes.json();
+                        const servers = cdnData.image_servers || cdnData.servers || [];
+                        if (servers.length > 0) {
+                            const first = servers[0].replace(/\/$/, '');
+                            cdnBase = first.startsWith('http') ? first : `https://${first}`;
+                        }
+                    }
+                } catch (_) {}
+
+                // 2. 改用 API v2 端點讀取作品資料
+                const apiTarget = encodeURIComponent(`https://nhentai.net/api/v2/galleries/${code}`);
                 const metaRes = await fetch(`${workerUrl}?url=${apiTarget}`);
-                if (!metaRes.ok) throw new Error(`讀取資料失敗 (狀態碼 ${metaRes.status})`);
+                if (!metaRes.ok) {
+                    const errText = await metaRes.text();
+                    throw new Error(`讀取資料失敗 (狀態碼 ${metaRes.status})\n${errText.slice(0, 80)}`);
+                }
                 
                 const data = await metaRes.json();
-                const mediaId = data.media_id;
-                const pages = data.images.pages;
+                const pages = data.pages || (data.images && data.images.pages) || [];
                 const total = pages.length;
+                if (total === 0) throw new Error('找不到任何頁面資料');
 
-                // 優先讀取日文原名，其次英文名，最後用番號後備
                 const rawTitle = (data.title && (data.title.japanese || data.title.english || data.title.pretty)) || code;
                 const safeTitle = sanitizeFilename(rawTitle) || code;
 
@@ -154,14 +171,23 @@
                 let pdf = null;
                 let coverPngBlob = null;
 
+                // 3. 逐頁抓取原圖
                 for (let i = 0; i < total; i++) {
                     const pageNum = i + 1;
                     status.innerText = `2/3 正在下載原圖 (${pageNum} / ${total} 頁)...`;
                     
-                    const ext = EXT_MAP[pages[i].t] || 'jpg';
-                    const imgTarget = encodeURIComponent(`https://i.nhentai.net/galleries/${mediaId}/${pageNum}.${ext}`);
+                    const p = pages[i];
+                    let fullImgUrl = '';
+                    if (p.path) {
+                        fullImgUrl = `${cdnBase}/${p.path.replace(/^\//, '')}`;
+                    } else {
+                        const ext = EXT_MAP[p.t] || 'jpg';
+                        fullImgUrl = `${cdnBase}/galleries/${data.media_id}/${pageNum}.${ext}`;
+                    }
+
+                    const imgTarget = encodeURIComponent(fullImgUrl);
                     const imgRes = await fetch(`${workerUrl}?url=${imgTarget}`);
-                    if (!imgRes.ok) throw new Error(`第 ${pageNum} 頁下載失敗`);
+                    if (!imgRes.ok) throw new Error(`第 ${pageNum} 頁下載失敗 (狀態碼 ${imgRes.status})`);
 
                     const blob = await imgRes.blob();
                     const isCover = (i === 0);
@@ -182,12 +208,10 @@
 
                 status.innerText = '3/3 正在儲存 PDF 與 PNG 封面...';
                 
-                // 先下載 PNG 封面
                 if (coverPngBlob) {
                     triggerDownload(coverPngBlob, `${safeTitle}_封面.png`);
                 }
 
-                // 間隔 0.8 秒再下載 PDF，防止 iPhone Safari 阻擋連續下載
                 await new Promise(r => setTimeout(r, 800));
                 pdf.save(`${safeTitle}.pdf`);
 
