@@ -1,5 +1,3 @@
-const TASKS = new Map();
-
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -30,19 +28,30 @@ function sanitize(name) {
   return clean ? clean.slice(0, 110) : "manga";
 }
 
-// 多路線抓取：直接連線遇 429 / 403 時，自動切換後備代理節點繞過 IP 限流
+// 附帶 8 秒超時保護嘅 fetch，防止死等卡住
+async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 async function smartFetch(targetUrl, referer = "https://nhentai.net/") {
   try {
-    const directRes = await fetch(targetUrl, {
-      headers: { ...HEADERS, Referer: referer },
-    });
+    const directRes = await fetchWithTimeout(
+      targetUrl,
+      { headers: { ...HEADERS, Referer: referer } },
+      8000
+    );
     if (directRes.ok) return directRes;
     if (directRes.status !== 429 && directRes.status !== 403) return directRes;
   } catch (_) {}
 
   const encoded = encodeURIComponent(targetUrl);
   const fallbacks = [
-    `https://api.codetabs.com/v1/proxy?quest=${encoded}`,
     `https://corsproxy.io/?${encoded}`,
     `https://api.allorigins.win/raw?url=${encoded}`,
   ];
@@ -50,15 +59,19 @@ async function smartFetch(targetUrl, referer = "https://nhentai.net/") {
   let lastRes = null;
   for (const proxyUrl of fallbacks) {
     try {
-      const res = await fetch(proxyUrl, { headers: { "User-Agent": HEADERS["User-Agent"] } });
+      const res = await fetchWithTimeout(
+        proxyUrl,
+        { headers: { "User-Agent": HEADERS["User-Agent"] } },
+        8000
+      );
       if (res.ok) return res;
       lastRes = res;
     } catch (_) {}
   }
-  return lastRes || new Response("All routes failed", { status: 502 });
+  return lastRes || new Response("連線超時或被目標網站限制 (429/403)", { status: 502 });
 }
 
-// 解析 nhentai（多層書名抓取 + 防 429 切換）
+// 解析 nhentai
 async function parseNhentai(code) {
   const res = await smartFetch(`https://nhentai.net/g/${code}/`, "https://nhentai.net/");
   if (!res.ok) throw new Error(`nhentai 讀取失敗 (${res.status})`);
@@ -72,17 +85,11 @@ async function parseNhentai(code) {
   const pageTitleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
 
   let title = "";
-  if (ogMatch && ogMatch[1].trim()) {
-    title = ogMatch[1];
-  } else if (h2Match && h2Match[1].replace(/<[^>]+>/g, "").trim()) {
-    title = h2Match[1];
-  } else if (h1Match && h1Match[1].replace(/<[^>]+>/g, "").trim()) {
-    title = h1Match[1];
-  } else if (pageTitleMatch) {
-    title = pageTitleMatch[1].replace(/\s*-\s*nhentai.*$/i, "");
-  } else {
-    title = code;
-  }
+  if (ogMatch && ogMatch[1].trim()) title = ogMatch[1];
+  else if (h2Match && h2Match[1].replace(/<[^>]+>/g, "").trim()) title = h2Match[1];
+  else if (h1Match && h1Match[1].replace(/<[^>]+>/g, "").trim()) title = h1Match[1];
+  else if (pageTitleMatch) title = pageTitleMatch[1].replace(/\s*-\s*nhentai.*$/i, "");
+  else title = code;
 
   const extMap = { j: "jpg", p: "png", g: "gif", w: "webp" };
   const servers = ["https://i.nhentai.net", "https://i2.nhentai.net", "https://i3.nhentai.net"];
@@ -111,7 +118,7 @@ async function parseNhentai(code) {
     }
   }
   if (urls.length === 0) throw new Error("找不到 nhentai 圖片");
-  return { title, urls, referer: "https://nhentai.net/" };
+  return { title: sanitize(title), urls, referer: "https://nhentai.net/" };
 }
 
 // 解析 MyReadingManga
@@ -137,17 +144,17 @@ async function parseMRM(url) {
       if (!urls.includes(src)) urls.push(src);
     }
   }
-  if (urls.length === 0) throw new Error("找不到 MyReadingManga 圖片（可能受 Cloudflare 阻擋）");
-  return { title, urls, referer: url };
+  if (urls.length === 0) throw new Error("找不到 MyReadingManga 圖片（可能受防護盾阻擋）");
+  return { title: sanitize(title), urls, referer: url };
 }
 
-// 解析 E-Hentai
-async function parseEHentai(url, task) {
+// 解析 E-Hentai（先回傳閱讀頁連結，由前端逐頁解析原圖，避免 Worker 超時）
+async function parseEHentai(url) {
   let base = url.split("?")[0];
   if (!base.endsWith("/")) base += "/";
   const ehHeaders = { ...HEADERS, Referer: "https://e-hentai.org/", Cookie: "nw=1" };
 
-  const res = await fetch(`${base}?nw=always`, { headers: ehHeaders });
+  const res = await fetchWithTimeout(`${base}?nw=always`, { headers: ehHeaders }, 10000);
   if (!res.ok) throw new Error(`E-Hentai 讀取失敗 (${res.status})`);
   const html = await res.text();
 
@@ -163,9 +170,10 @@ async function parseEHentai(url, task) {
 
   const readerLinks = [];
   for (let p = 0; p <= maxPage; p++) {
-    task.progress = `正在掃描 E-Hentai 目錄 (${p + 1}/${maxPage + 1})...`;
     const pHtml =
-      p === 0 ? html : await (await fetch(`${base}?p=${p}&nw=always`, { headers: ehHeaders })).text();
+      p === 0
+        ? html
+        : await (await fetchWithTimeout(`${base}?p=${p}&nw=always`, { headers: ehHeaders }, 10000)).text();
     const sRegex = /https:\/\/e-hentai\.org\/s\/[a-z0-9]+\/\d+-\d+/gi;
     let sm;
     while ((sm = sRegex.exec(pHtml)) !== null) {
@@ -173,81 +181,69 @@ async function parseEHentai(url, task) {
     }
   }
   if (readerLinks.length === 0) throw new Error("找不到 E-Hentai 閱讀連結");
-
-  const urls = [];
-  for (let i = 0; i < readerLinks.length; i++) {
-    task.progress = `正在解析 E-Hentai 原圖網址 (${i + 1}/${readerLinks.length})...`;
-    const rHtml = await (await fetch(readerLinks[i], { headers: ehHeaders })).text();
-    const imgMatch = rHtml.match(/<img id="img"[^>]+src=["']([^"']+)["']/i);
-    if (imgMatch) urls.push(imgMatch[1]);
-  }
-  if (urls.length === 0) throw new Error("無法取得 E-Hentai 原圖網址");
-  return { title, urls, referer: "https://e-hentai.org/" };
-}
-
-async function processTask(taskId, query) {
-  const task = TASKS.get(taskId);
-  try {
-    const q = query.trim();
-    task.progress = "正在識別網站並抓取原圖清單...";
-    let info;
-    if (/^\d+$/.test(q)) {
-      info = await parseNhentai(q);
-    } else if (q.includes("nhentai.net/g/")) {
-      const m = q.match(/\/g\/(\d+)/);
-      info = await parseNhentai(m[1]);
-    } else if (q.includes("myreadingmanga.info")) {
-      info = await parseMRM(q);
-    } else if (q.includes("e-hentai.org/g/") || q.includes("exhentai.org/g/")) {
-      info = await parseEHentai(q.replace("exhentai.org", "e-hentai.org"), task);
-    } else {
-      throw new Error("請輸入 nhentai 番號、MyReadingManga 或 E-Hentai 網址");
-    }
-
-    task.title = sanitize(info.title);
-    task.urls = info.urls;
-    task.referer = info.referer;
-    task.status = "done";
-    task.progress = `解析完成！共 ${info.urls.length} 頁原圖`;
-  } catch (e) {
-    task.status = "error";
-    task.progress = e.message;
-  }
+  return { title: sanitize(title), urls: readerLinks, referer: "https://e-hentai.org/", mode: "eh_pages" };
 }
 
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request) {
     if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
     const url = new URL(request.url);
 
-    if (url.pathname === "/api/create" && request.method === "POST") {
-      const { query } = await request.json();
-      const taskId = crypto.randomUUID().slice(0, 8);
-      TASKS.set(taskId, { status: "running", progress: "已加入後台排程...", title: "", urls: [], referer: "" });
-      ctx.waitUntil(processTask(taskId, query));
-      return new Response(JSON.stringify({ task_id: taskId }), {
-        headers: { ...CORS, "Content-Type": "application/json" },
-      });
-    }
-
-    if (url.pathname.startsWith("/api/status/")) {
-      const taskId = url.pathname.split("/").pop();
-      const task = TASKS.get(taskId);
-      if (!task) {
-        return new Response(JSON.stringify({ status: "error", progress: "任務已過期或節點已重置，請重新輸入" }), {
+    // 即時解析作品目錄並直接回傳清單
+    if (url.pathname === "/api/parse" && request.method === "POST") {
+      try {
+        const { query } = await request.json();
+        const q = (query || "").trim();
+        let data;
+        if (/^\d+$/.test(q)) {
+          data = await parseNhentai(q);
+        } else if (q.includes("nhentai.net/g/")) {
+          const m = q.match(/\/g\/(\d+)/);
+          data = await parseNhentai(m[1]);
+        } else if (q.includes("myreadingmanga.info")) {
+          data = await parseMRM(q);
+        } else if (q.includes("e-hentai.org/g/") || q.includes("exhentai.org/g/")) {
+          data = await parseEHentai(q.replace("exhentai.org", "e-hentai.org"));
+        } else {
+          throw new Error("請輸入 nhentai 番號、MyReadingManga 或 E-Hentai 網址");
+        }
+        return new Response(JSON.stringify({ ok: true, ...data }), {
+          headers: { ...CORS, "Content-Type": "application/json" },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ ok: false, error: e.message }), {
+          status: 400,
           headers: { ...CORS, "Content-Type": "application/json" },
         });
       }
-      return new Response(JSON.stringify(task), {
-        headers: { ...CORS, "Content-Type": "application/json" },
-      });
     }
 
+    // 單張圖片或 E-Hentai 單頁解析中轉
     const targetUrl = url.searchParams.get("url");
     const referer = url.searchParams.get("ref") || "https://nhentai.net/";
     if (!targetUrl) return new Response("Missing url", { status: 400, headers: CORS });
 
     try {
+      // 若為 E-Hentai 單頁閱讀網址，自動抽出真實原圖並下載
+      if (targetUrl.includes("e-hentai.org/s/")) {
+        const pageRes = await fetchWithTimeout(
+          targetUrl,
+          { headers: { ...HEADERS, Referer: "https://e-hentai.org/", Cookie: "nw=1" } },
+          10000
+        );
+        const pageHtml = await pageRes.text();
+        const imgMatch = pageHtml.match(/<img id="img"[^>]+src=["']([^"']+)["']/i);
+        if (!imgMatch) return new Response("無法解析 E-Hentai 原圖", { status: 502, headers: CORS });
+        const imgRes = await fetchWithTimeout(
+          imgMatch[1],
+          { headers: { ...HEADERS, Referer: targetUrl } },
+          12000
+        );
+        const newHeaders = new Headers(imgRes.headers);
+        Object.entries(CORS).forEach(([k, v]) => newHeaders.set(k, v));
+        return new Response(imgRes.body, { status: imgRes.status, headers: newHeaders });
+      }
+
       const response = await smartFetch(targetUrl, referer);
       const newHeaders = new Headers(response.headers);
       Object.entries(CORS).forEach(([k, v]) => newHeaders.set(k, v));
