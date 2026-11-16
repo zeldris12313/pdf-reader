@@ -132,7 +132,7 @@ async function parseNhentai(code) {
   return { title, urls, referer: "https://nhentai.net/" };
 }
 
-// 解析 MyReadingManga
+// 解析 MyReadingMangA
 async function parseMRM(url) {
   const res = await fetch(url, { headers: { ...HEADERS, Referer: "https://myreadingmanga.info/" } });
   if (!res.ok) throw new Error(`MyReadingManga 讀取失敗 (${res.status})`);
