@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>番號轉 PDF</title>
+    <!-- 引入 jsPDF 用於在手機瀏覽器直接生成 PDF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #121212; color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 16px; box-sizing: border-box; }
+        .card { background: #1e1e1e; padding: 1.8rem; border-radius: 16px; width: 100%; max-width: 400px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.2rem; }
+        h2 { margin: 0; font-size: 1.3rem; }
+        .gear-btn { background: #2c2c2c; border: none; color: #fff; padding: 8px 12px; border-radius: 8px; font-size: 0.9rem; cursor: pointer; }
+        input { width: 100%; padding: 14px; font-size: 1.1rem; border-radius: 10px; border: 1px solid #333; background: #2c2c2c; color: #fff; box-sizing: border-box; margin-bottom: 1rem; }
+        input[type="number"] { font-size: 1.3rem; text-align: center; letter-spacing: 2px; }
+        button.primary { width: 100%; padding: 14px; font-size: 1.05rem; font-weight: bold; border-radius: 10px; border: none; background: #ed2553; color: white; cursor: pointer; }
+        button.primary:disabled { background: #555; }
+        #status { margin-top: 1rem; font-size: 0.9rem; color: #aaa; text-align: center; min-height: 1.4rem; line-height: 1.5; }
+        #settings-panel { display: none; margin-top: 1.2rem; padding-top: 1.2rem; border-top: 1px solid #333; }
+        label { display: block; font-size: 0.85rem; color: #bbb; margin-bottom: 6px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="header">
+            <h2>番號轉 PDF 工具</h2>
+            <button class="gear-btn" onclick="toggleSettings()">⚙️ 設定中轉站</button>
+        </div>
+
+        <input type="number" id="code" placeholder="輸入番號 (例如 177013)" inputmode="numeric">
+        <button class="primary" id="btn" onclick="startProcess()">一鍵下載並轉成 PDF</button>
+        <div id="status">請先按右上角「⚙️ 設定」填入中轉站網址</div>
+
+        <!-- 手機設定區：自動儲存在手機瀏覽器，唔使改 Code -->
+        <div id="settings-panel">
+            <label>Cloudflare Worker 中轉站網址</label>
+            <input type="url" id="worker-url" placeholder="https://xxx.xxx.workers.dev">
+            <button class="primary" style="background:#2ea043;" onclick="saveSettings()">儲存網址</button>
+        </div>
+    </div>
+
+    <script>
+        const EXT_MAP = { j: 'jpg', p: 'png', g: 'gif', w: 'webp' };
+
+        // 載入已儲存的中轉站網址
+        window.onload = () => {
+            const saved = localStorage.getItem('worker_url');
+            if (saved) {
+                document.getElementById('worker-url').value = saved;
+                document.getElementById('status').innerText = '準備就緒，請輸入番號';
+            }
+        };
+
+        function toggleSettings() {
+            const p = document.getElementById('settings-panel');
+            p.style.display = (p.style.display === 'none' || !p.style.display) ? 'block' : 'none';
+        }
+
+        function saveSettings() {
+            let url = document.getElementById('worker-url').value.trim();
+            if (url.endsWith('/')) url = url.slice(0, -1);
+            localStorage.setItem('worker_url', url);
+            alert('✅ 已儲存！');
+            document.getElementById('settings-panel').style.display = 'none';
+            document.getElementById('status').innerText = '準備就緒，請輸入番號';
+        }
+
+        // 將圖片透過 Canvas 統一轉為標準 JPEG 並取得原圖長闊比例
+        function blobToJpegData(blob) {
+            return new Promise((resolve, reject) => {
+                const url = URL.createObjectURL(blob);
+                const img = new Image();
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.naturalWidth;
+                    canvas.height = img.naturalHeight;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0);
+                    URL.revokeObjectURL(url);
+                    resolve({
+                        dataUrl: canvas.toDataURL('image/jpeg', 0.92),
+                        width: img.naturalWidth,
+                        height: img.naturalHeight
+                    });
+                };
+                img.onerror = () => reject(new Error('圖片解碼失敗'));
+                img.src = url;
+            });
+        }
+
+        async function startProcess() {
+            const workerUrl = localStorage.getItem('worker_url');
+            const code = document.getElementById('code').value.trim();
+            const btn = document.getElementById('btn');
+            const status = document.getElementById('status');
+
+            if (!workerUrl) {
+                toggleSettings();
+                return alert('請先填入 Cloudflare 中轉站網址！');
+            }
+            if (!code) return alert('請輸入番號');
+
+            btn.disabled = true;
+            status.innerText = '1/3 正在讀取作品資料...';
+
+            try {
+                // 1. 取得作品總頁數與原圖格式清單
+                const apiTarget = encodeURIComponent(`https://nhentai.net/api/gallery/${code}`);
+                const metaRes = await fetch(`${workerUrl}?url=${apiTarget}`);
+                if (!metaRes.ok) throw new Error(`讀取資料失敗 (狀態碼 ${metaRes.status})`);
+                
+                const data = await metaRes.json();
+                const mediaId = data.media_id;
+                const pages = data.images.pages;
+                const total = pages.length;
+
+                const { jsPDF } = window.jspdf;
+                let pdf = null;
+
+                // 2. 逐頁抓取 i.nhentai.net 最高清 Full Page 原圖
+                for (let i = 0; i < total; i++) {
+                    const pageNum = i + 1;
+                    status.innerText = `2/3 正在下載原圖 (${pageNum} / ${total} 頁)...`;
+                    
+                    const ext = EXT_MAP[pages[i].t] || 'jpg';
+                    const imgTarget = encodeURIComponent(`https://i.nhentai.net/galleries/${mediaId}/${pageNum}.${ext}`);
+                    const imgRes = await fetch(`${workerUrl}?url=${imgTarget}`);
+                    if (!imgRes.ok) throw new Error(`第 ${pageNum} 頁下載失敗`);
+
+                    const blob = await imgRes.blob();
+                    const imgInfo = await blobToJpegData(blob);
+
+                    // 依照每頁原圖真實比例建立 PDF 頁面（睇漫畫唔會有白邊）
+                    const orientation = imgInfo.width > imgInfo.height ? 'l' : 'p';
+                    if (i === 0) {
+                        pdf = new jsPDF({ orientation, unit: 'px', format: [imgInfo.width, imgInfo.height] });
+                    } else {
+                        pdf.addPage([imgInfo.width, imgInfo.height], orientation);
+                    }
+                    pdf.addImage(imgInfo.dataUrl, 'JPEG', 0, 0, imgInfo.width, imgInfo.height);
+                }
+
+                // 3. 儲存 PDF 到手機
+                status.innerText = '3/3 正在生成 PDF 檔案...';
+                pdf.save(`${code}.pdf`);
+                status.innerText = `✅ 完成！已下載 ${code}.pdf（共 ${total} 頁原圖）`;
+            } catch (err) {
+                status.innerText = `❌ 錯誤：${err.message}`;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>
