@@ -38,7 +38,6 @@
         <button class="primary" id="btn" onclick="startProcess()">開始讀取並製作檔案</button>
         <div id="status">請先按右上角「⚙️ 設定」填入中轉站網址</div>
 
-        <!-- 完成後顯示獨立儲存按鈕 -->
         <div id="result-box">
             <div class="book-title" id="display-title"></div>
             <button class="dl-btn dl-pdf" onclick="saveFile('pdf')">📄 儲存／下載 PDF</button>
@@ -54,6 +53,7 @@
 
     <script>
         const EXT_MAP = { j: 'jpg', p: 'png', g: 'gif', w: 'webp' };
+        const IMG_SERVERS = ['https://i.nhentai.net', 'https://i2.nhentai.net', 'https://i3.nhentai.net'];
         let readyFiles = { pdf: null, png: null };
 
         window.onload = () => {
@@ -86,6 +86,26 @@
                 .replace(/\s+/g, ' ')
                 .trim()
                 .slice(0, 120);
+        }
+
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+        // 遇到 429 限流時自動倒數等待並重試
+        async function fetchWithRetry(url, statusEl, stepLabel, maxRetries = 3) {
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                const res = await fetch(url);
+                if (res.status !== 429) {
+                    return res;
+                }
+                if (attempt === maxRetries) {
+                    return res;
+                }
+                const waitSec = attempt * 10; // 第1次等10秒，第2次等20秒
+                for (let s = waitSec; s > 0; s--) {
+                    statusEl.innerText = `⏳ 觸發頻率限制 (429)，${s} 秒後自動重試 (${attempt}/${maxRetries - 1})...\n${stepLabel}`;
+                    await sleep(1000);
+                }
+            }
         }
 
         function processImageBlob(blob, isCover) {
@@ -122,7 +142,6 @@
             });
         }
 
-        // 優先使用手機原生分享/儲存選單（保留完整書名），電腦則直接下載
         async function saveFile(type) {
             const item = readyFiles[type];
             if (!item) return;
@@ -133,11 +152,10 @@
                     await navigator.share({ files: [file] });
                     return;
                 } catch (e) {
-                    if (e.name === 'AbortError') return; // 用戶自行取消分享
+                    if (e.name === 'AbortError') return;
                 }
             }
 
-            // 電腦版或後備下載方式
             const url = URL.createObjectURL(item.blob);
             const a = document.createElement('a');
             a.href = url;
@@ -167,22 +185,9 @@
             status.innerText = '1/3 正在讀取作品資料與書名...';
 
             try {
-                let cdnBase = 'https://i.nhentai.net';
-                try {
-                    const cdnTarget = encodeURIComponent('https://nhentai.net/api/v2/cdn');
-                    const cdnRes = await fetch(`${workerUrl}?url=${cdnTarget}`);
-                    if (cdnRes.ok) {
-                        const cdnData = await cdnRes.json();
-                        const servers = cdnData.image_servers || cdnData.servers || [];
-                        if (servers.length > 0) {
-                            const first = servers[0].replace(/\/$/, '');
-                            cdnBase = first.startsWith('http') ? first : `https://${first}`;
-                        }
-                    }
-                } catch (_) {}
-
+                // 直接讀取作品資料（省去額外 CDN API 請求）
                 const apiTarget = encodeURIComponent(`https://nhentai.net/api/v2/galleries/${code}`);
-                const metaRes = await fetch(`${workerUrl}?url=${apiTarget}`);
+                const metaRes = await fetchWithRetry(`${workerUrl}?url=${apiTarget}`, status, '正在讀取作品資料...');
                 if (!metaRes.ok) {
                     const errText = await metaRes.text();
                     throw new Error(`讀取資料失敗 (狀態碼 ${metaRes.status})\n${errText.slice(0, 80)}`);
@@ -202,8 +207,11 @@
 
                 for (let i = 0; i < total; i++) {
                     const pageNum = i + 1;
-                    status.innerText = `2/3 正在下載原圖 (${pageNum} / ${total} 頁)...`;
+                    const stepText = `2/3 正在下載原圖 (${pageNum} / ${total} 頁)...`;
+                    status.innerText = stepText;
                     
+                    // 輪流分散使用不同圖片伺服器，減輕單一節點壓力
+                    const cdnBase = IMG_SERVERS[i % IMG_SERVERS.length];
                     const p = pages[i];
                     let fullImgUrl = '';
                     if (p.path) {
@@ -214,7 +222,7 @@
                     }
 
                     const imgTarget = encodeURIComponent(fullImgUrl);
-                    const imgRes = await fetch(`${workerUrl}?url=${imgTarget}`);
+                    const imgRes = await fetchWithRetry(`${workerUrl}?url=${imgTarget}`, status, stepText);
                     if (!imgRes.ok) throw new Error(`第 ${pageNum} 頁下載失敗 (狀態碼 ${imgRes.status})`);
 
                     const blob = await imgRes.blob();
@@ -232,6 +240,9 @@
                         pdf.addPage([imgInfo.width, imgInfo.height], orientation);
                     }
                     pdf.addImage(imgInfo.dataUrl, 'JPEG', 0, 0, imgInfo.width, imgInfo.height);
+
+                    // 每頁之間停頓 0.2 秒，避免請求過密觸發 429
+                    if (i < total - 1) await sleep(200);
                 }
 
                 status.innerText = '3/3 正在打包檔案...';
