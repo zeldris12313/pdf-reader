@@ -30,11 +30,37 @@ function sanitize(name) {
   return clean ? clean.slice(0, 110) : "manga";
 }
 
-// 解析 nhentai（多層書名抓取）
+// 多路線抓取：直接連線遇 429 / 403 時，自動切換後備代理節點繞過 IP 限流
+async function smartFetch(targetUrl, referer = "https://nhentai.net/") {
+  try {
+    const directRes = await fetch(targetUrl, {
+      headers: { ...HEADERS, Referer: referer },
+    });
+    if (directRes.ok) return directRes;
+    if (directRes.status !== 429 && directRes.status !== 403) return directRes;
+  } catch (_) {}
+
+  const encoded = encodeURIComponent(targetUrl);
+  const fallbacks = [
+    `https://api.codetabs.com/v1/proxy?quest=${encoded}`,
+    `https://corsproxy.io/?${encoded}`,
+    `https://api.allorigins.win/raw?url=${encoded}`,
+  ];
+
+  let lastRes = null;
+  for (const proxyUrl of fallbacks) {
+    try {
+      const res = await fetch(proxyUrl, { headers: { "User-Agent": HEADERS["User-Agent"] } });
+      if (res.ok) return res;
+      lastRes = res;
+    } catch (_) {}
+  }
+  return lastRes || new Response("All routes failed", { status: 502 });
+}
+
+// 解析 nhentai（多層書名抓取 + 防 429 切換）
 async function parseNhentai(code) {
-  const res = await fetch(`https://nhentai.net/g/${code}/`, {
-    headers: { ...HEADERS, Referer: "https://nhentai.net/" },
-  });
+  const res = await smartFetch(`https://nhentai.net/g/${code}/`, "https://nhentai.net/");
   if (!res.ok) throw new Error(`nhentai 讀取失敗 (${res.status})`);
   const html = await res.text();
 
@@ -90,9 +116,7 @@ async function parseNhentai(code) {
 
 // 解析 MyReadingManga
 async function parseMRM(url) {
-  const res = await fetch(url, {
-    headers: { ...HEADERS, Referer: "https://myreadingmanga.info/" },
-  });
+  const res = await smartFetch(url, "https://myreadingmanga.info/");
   if (!res.ok) throw new Error(`MyReadingManga 讀取失敗 (${res.status})`);
   const html = await res.text();
   const h1Match = html.match(/<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([\s\S]*?)<\/h1>/i);
@@ -224,7 +248,7 @@ export default {
     if (!targetUrl) return new Response("Missing url", { status: 400, headers: CORS });
 
     try {
-      const response = await fetch(targetUrl, { headers: { ...HEADERS, Referer: referer } });
+      const response = await smartFetch(targetUrl, referer);
       const newHeaders = new Headers(response.headers);
       Object.entries(CORS).forEach(([k, v]) => newHeaders.set(k, v));
       return new Response(response.body, { status: response.status, headers: newHeaders });
