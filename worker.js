@@ -30,15 +30,17 @@ function sanitize(name) {
   return clean ? clean.slice(0, 110) : "manga";
 }
 
-// 解析 nhentai（加強多層標題抓取）
+// 解析 nhentai（多層書名抓取）
 async function parseNhentai(code) {
-  const res = await fetch(`https://nhentai.net/g/${code}/`, { headers: { ...HEADERS, Referer: "https://nhentai.net/" } });
+  const res = await fetch(`https://nhentai.net/g/${code}/`, {
+    headers: { ...HEADERS, Referer: "https://nhentai.net/" },
+  });
   if (!res.ok) throw new Error(`nhentai 讀取失敗 (${res.status})`);
   const html = await res.text();
 
-  // 依序嘗試：og:title -> 日文副標題(h2) -> 主標題(h1) -> 網頁 <title> -> 番號
-  const ogMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
-               || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
+  const ogMatch =
+    html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
   const h2Match = html.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
   const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
   const pageTitleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
@@ -85,61 +87,21 @@ async function parseNhentai(code) {
   if (urls.length === 0) throw new Error("找不到 nhentai 圖片");
   return { title, urls, referer: "https://nhentai.net/" };
 }
-  // 依序嘗試：日文副標題(h2) -> 主標題(h1) -> 網頁 <title> -> 番號
-  const h2Match = html.match(/<h2[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/h2>/i);
-  const h1Match = html.match(/<h1[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/h1>/i);
-  const pageTitleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
 
-  let title = "";
-  if (h2Match && h2Match[1].replace(/<[^>]+>/g, "").trim()) {
-    title = h2Match[1];
-  } else if (h1Match && h1Match[1].replace(/<[^>]+>/g, "").trim()) {
-    title = h1Match[1];
-  } else if (pageTitleMatch) {
-    title = pageTitleMatch[1].replace(/\s*-\s*nhentai.*$/i, "");
-  } else {
-    title = code;
-  }
-
-  const extMap = { j: "jpg", p: "png", g: "gif", w: "webp" };
-  const servers = ["https://i.nhentai.net", "https://i2.nhentai.net", "https://i3.nhentai.net"];
-  const urls = [];
-
-  // 支援單引號或雙引號嘅 _gallery JSON
-  const jsonMatch = html.match(/window\._gallery\s*=\s*JSON\.parse\((['"])(.+?)\1\)/);
-  if (jsonMatch) {
-    try {
-      const raw = jsonMatch[1] === "'" ? jsonMatch[2].replace(/\\'/g, "'") : JSON.parse(`"${jsonMatch[2]}"`);
-      const data = JSON.parse(raw);
-      title = (data.title && (data.title.japanese || data.title.english || data.title.pretty)) || title;
-      const pages = (data.images && data.images.pages) || [];
-      pages.forEach((p, idx) => {
-        const ext = extMap[p.t] || "jpg";
-        urls.push(`${servers[idx % servers.length]}/galleries/${data.media_id}/${idx + 1}.${ext}`);
-      });
-    } catch (_) {}
-  }
-
-  if (urls.length === 0) {
-    const regex = /\/galleries\/(\d+)\/(\d+)t\.(jpg|png|gif|webp)/gi;
-    let m;
-    while ((m = regex.exec(html)) !== null) {
-      const u = `${servers[urls.length % servers.length]}/galleries/${m[1]}/${m[2]}.${m[3]}`;
-      if (!urls.includes(u)) urls.push(u);
-    }
-  }
-  if (urls.length === 0) throw new Error("找不到 nhentai 圖片");
-  return { title, urls, referer: "https://nhentai.net/" };
-}
-
-// 解析 MyReadingMangA
+// 解析 MyReadingManga
 async function parseMRM(url) {
-  const res = await fetch(url, { headers: { ...HEADERS, Referer: "https://myreadingmanga.info/" } });
+  const res = await fetch(url, {
+    headers: { ...HEADERS, Referer: "https://myreadingmanga.info/" },
+  });
   if (!res.ok) throw new Error(`MyReadingManga 讀取失敗 (${res.status})`);
   const html = await res.text();
   const h1Match = html.match(/<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([\s\S]*?)<\/h1>/i);
   const pageTitleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
-  const title = h1Match ? h1Match[1] : (pageTitleMatch ? pageTitleMatch[1].replace(/\s*[-|]\s*MyReadingManga.*$/i, "") : "MyReadingManga");
+  const title = h1Match
+    ? h1Match[1]
+    : pageTitleMatch
+    ? pageTitleMatch[1].replace(/\s*[-|]\s*MyReadingManga.*$/i, "")
+    : "MyReadingManga";
 
   const urls = [];
   const imgRegex = /<img[^>]+(?:data-src|data-lazy-src|src)=["']([^"']+)["']/gi;
@@ -171,12 +133,15 @@ async function parseEHentai(url, task) {
 
   let maxPage = 0;
   const pageMatches = [...html.matchAll(/\?p=(\d+)/g)];
-  pageMatches.forEach(m => { maxPage = Math.max(maxPage, parseInt(m[1], 10)); });
+  pageMatches.forEach((m) => {
+    maxPage = Math.max(maxPage, parseInt(m[1], 10));
+  });
 
   const readerLinks = [];
   for (let p = 0; p <= maxPage; p++) {
     task.progress = `正在掃描 E-Hentai 目錄 (${p + 1}/${maxPage + 1})...`;
-    const pHtml = p === 0 ? html : await (await fetch(`${base}?p=${p}&nw=always`, { headers: ehHeaders })).text();
+    const pHtml =
+      p === 0 ? html : await (await fetch(`${base}?p=${p}&nw=always`, { headers: ehHeaders })).text();
     const sRegex = /https:\/\/e-hentai\.org\/s\/[a-z0-9]+\/\d+-\d+/gi;
     let sm;
     while ((sm = sRegex.exec(pHtml)) !== null) {
@@ -236,14 +201,22 @@ export default {
       const taskId = crypto.randomUUID().slice(0, 8);
       TASKS.set(taskId, { status: "running", progress: "已加入後台排程...", title: "", urls: [], referer: "" });
       ctx.waitUntil(processTask(taskId, query));
-      return new Response(JSON.stringify({ task_id: taskId }), { headers: { ...CORS, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ task_id: taskId }), {
+        headers: { ...CORS, "Content-Type": "application/json" },
+      });
     }
 
     if (url.pathname.startsWith("/api/status/")) {
       const taskId = url.pathname.split("/").pop();
       const task = TASKS.get(taskId);
-      if (!task) return new Response(JSON.stringify({ status: "error", progress: "任務已過期或節點已重置，請重新輸入" }), { headers: { ...CORS, "Content-Type": "application/json" } });
-      return new Response(JSON.stringify(task), { headers: { ...CORS, "Content-Type": "application/json" } });
+      if (!task) {
+        return new Response(JSON.stringify({ status: "error", progress: "任務已過期或節點已重置，請重新輸入" }), {
+          headers: { ...CORS, "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify(task), {
+        headers: { ...CORS, "Content-Type": "application/json" },
+      });
     }
 
     const targetUrl = url.searchParams.get("url");
@@ -258,5 +231,5 @@ export default {
     } catch (err) {
       return new Response(err.message, { status: 500, headers: CORS });
     }
-  }
+  },
 };
