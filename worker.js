@@ -36,6 +36,55 @@ async function parseNhentai(code) {
   if (!res.ok) throw new Error(`nhentai 讀取失敗 (${res.status})`);
   const html = await res.text();
 
+  // 依序嘗試：og:title -> 日文副標題(h2) -> 主標題(h1) -> 網頁 <title> -> 番號
+  const ogMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+               || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
+  const h2Match = html.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
+  const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  const pageTitleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
+
+  let title = "";
+  if (ogMatch && ogMatch[1].trim()) {
+    title = ogMatch[1];
+  } else if (h2Match && h2Match[1].replace(/<[^>]+>/g, "").trim()) {
+    title = h2Match[1];
+  } else if (h1Match && h1Match[1].replace(/<[^>]+>/g, "").trim()) {
+    title = h1Match[1];
+  } else if (pageTitleMatch) {
+    title = pageTitleMatch[1].replace(/\s*-\s*nhentai.*$/i, "");
+  } else {
+    title = code;
+  }
+
+  const extMap = { j: "jpg", p: "png", g: "gif", w: "webp" };
+  const servers = ["https://i.nhentai.net", "https://i2.nhentai.net", "https://i3.nhentai.net"];
+  const urls = [];
+
+  const jsonMatch = html.match(/window\._gallery\s*=\s*JSON\.parse\((['"])(.+?)\1\)/);
+  if (jsonMatch) {
+    try {
+      const raw = jsonMatch[1] === "'" ? jsonMatch[2].replace(/\\'/g, "'") : JSON.parse(`"${jsonMatch[2]}"`);
+      const data = JSON.parse(raw);
+      title = (data.title && (data.title.japanese || data.title.english || data.title.pretty)) || title;
+      const pages = (data.images && data.images.pages) || [];
+      pages.forEach((p, idx) => {
+        const ext = extMap[p.t] || "jpg";
+        urls.push(`${servers[idx % servers.length]}/galleries/${data.media_id}/${idx + 1}.${ext}`);
+      });
+    } catch (_) {}
+  }
+
+  if (urls.length === 0) {
+    const regex = /\/galleries\/(\d+)\/(\d+)t\.(jpg|png|gif|webp)/gi;
+    let m;
+    while ((m = regex.exec(html)) !== null) {
+      const u = `${servers[urls.length % servers.length]}/galleries/${m[1]}/${m[2]}.${m[3]}`;
+      if (!urls.includes(u)) urls.push(u);
+    }
+  }
+  if (urls.length === 0) throw new Error("找不到 nhentai 圖片");
+  return { title, urls, referer: "https://nhentai.net/" };
+}
   // 依序嘗試：日文副標題(h2) -> 主標題(h1) -> 網頁 <title> -> 番號
   const h2Match = html.match(/<h2[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/h2>/i);
   const h1Match = html.match(/<h1[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/h1>/i);
