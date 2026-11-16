@@ -6,7 +6,6 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>番號轉 PDF</title>
-    <!-- 引入 jsPDF 用於在手機瀏覽器直接生成 PDF -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #121212; color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 16px; box-sizing: border-box; }
@@ -18,7 +17,7 @@
         input[type="number"] { font-size: 1.3rem; text-align: center; letter-spacing: 2px; }
         button.primary { width: 100%; padding: 14px; font-size: 1.05rem; font-weight: bold; border-radius: 10px; border: none; background: #ed2553; color: white; cursor: pointer; }
         button.primary:disabled { background: #555; }
-        #status { margin-top: 1rem; font-size: 0.9rem; color: #aaa; text-align: center; min-height: 1.4rem; line-height: 1.5; }
+        #status { margin-top: 1rem; font-size: 0.9rem; color: #aaa; text-align: center; min-height: 1.4rem; line-height: 1.5; word-break: break-word; }
         #settings-panel { display: none; margin-top: 1.2rem; padding-top: 1.2rem; border-top: 1px solid #333; }
         label { display: block; font-size: 0.85rem; color: #bbb; margin-bottom: 6px; }
     </style>
@@ -31,10 +30,9 @@
         </div>
 
         <input type="number" id="code" placeholder="輸入番號 (例如 177013)" inputmode="numeric">
-        <button class="primary" id="btn" onclick="startProcess()">一鍵下載並轉成 PDF</button>
+        <button class="primary" id="btn" onclick="startProcess()">下載 PDF ＋ 封面 PNG</button>
         <div id="status">請先按右上角「⚙️ 設定」填入中轉站網址</div>
 
-        <!-- 手機設定區：自動儲存在手機瀏覽器，唔使改 Code -->
         <div id="settings-panel">
             <label>Cloudflare Worker 中轉站網址</label>
             <input type="url" id="worker-url" placeholder="https://xxx.xxx.workers.dev">
@@ -45,7 +43,6 @@
     <script>
         const EXT_MAP = { j: 'jpg', p: 'png', g: 'gif', w: 'webp' };
 
-        // 載入已儲存的中轉站網址
         window.onload = () => {
             const saved = localStorage.getItem('worker_url');
             if (saved) {
@@ -68,8 +65,17 @@
             document.getElementById('status').innerText = '準備就緒，請輸入番號';
         }
 
-        // 將圖片透過 Canvas 統一轉為標準 JPEG 並取得原圖長闊比例
-        function blobToJpegData(blob) {
+        // 過濾檔名中系統唔允許嘅特殊字元，並限制長度避免過長報錯
+        function sanitizeFilename(name) {
+            return name
+                .replace(/[\/\\?%*:|"<>]/g, '_')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .slice(0, 120);
+        }
+
+        // 處理圖片：輸出供 PDF 使用嘅數據，若為第 1 頁則額外生成標準 PNG Blob
+        function processImageBlob(blob, isCover) {
             return new Promise((resolve, reject) => {
                 const url = URL.createObjectURL(blob);
                 const img = new Image();
@@ -80,15 +86,39 @@
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0);
                     URL.revokeObjectURL(url);
-                    resolve({
-                        dataUrl: canvas.toDataURL('image/jpeg', 0.92),
+
+                    const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.92);
+                    const baseResult = {
+                        dataUrl: jpegDataUrl,
                         width: img.naturalWidth,
-                        height: img.naturalHeight
-                    });
+                        height: img.naturalHeight,
+                        coverPngBlob: null
+                    };
+
+                    if (isCover) {
+                        canvas.toBlob((pngBlob) => {
+                            baseResult.coverPngBlob = pngBlob;
+                            resolve(baseResult);
+                        }, 'image/png');
+                    } else {
+                        resolve(baseResult);
+                    }
                 };
                 img.onerror = () => reject(new Error('圖片解碼失敗'));
                 img.src = url;
             });
+        }
+
+        // 觸發瀏覽器下載檔案
+        function triggerDownload(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 5000);
         }
 
         async function startProcess() {
@@ -104,10 +134,9 @@
             if (!code) return alert('請輸入番號');
 
             btn.disabled = true;
-            status.innerText = '1/3 正在讀取作品資料...';
+            status.innerText = '1/3 正在讀取作品資料與書名...';
 
             try {
-                // 1. 取得作品總頁數與原圖格式清單
                 const apiTarget = encodeURIComponent(`https://nhentai.net/api/gallery/${code}`);
                 const metaRes = await fetch(`${workerUrl}?url=${apiTarget}`);
                 if (!metaRes.ok) throw new Error(`讀取資料失敗 (狀態碼 ${metaRes.status})`);
@@ -117,10 +146,14 @@
                 const pages = data.images.pages;
                 const total = pages.length;
 
+                // 優先讀取日文原名，其次英文名，最後用番號後備
+                const rawTitle = (data.title && (data.title.japanese || data.title.english || data.title.pretty)) || code;
+                const safeTitle = sanitizeFilename(rawTitle) || code;
+
                 const { jsPDF } = window.jspdf;
                 let pdf = null;
+                let coverPngBlob = null;
 
-                // 2. 逐頁抓取 i.nhentai.net 最高清 Full Page 原圖
                 for (let i = 0; i < total; i++) {
                     const pageNum = i + 1;
                     status.innerText = `2/3 正在下載原圖 (${pageNum} / ${total} 頁)...`;
@@ -131,9 +164,13 @@
                     if (!imgRes.ok) throw new Error(`第 ${pageNum} 頁下載失敗`);
 
                     const blob = await imgRes.blob();
-                    const imgInfo = await blobToJpegData(blob);
+                    const isCover = (i === 0);
+                    const imgInfo = await processImageBlob(blob, isCover);
 
-                    // 依照每頁原圖真實比例建立 PDF 頁面（睇漫畫唔會有白邊）
+                    if (isCover) {
+                        coverPngBlob = imgInfo.coverPngBlob;
+                    }
+
                     const orientation = imgInfo.width > imgInfo.height ? 'l' : 'p';
                     if (i === 0) {
                         pdf = new jsPDF({ orientation, unit: 'px', format: [imgInfo.width, imgInfo.height] });
@@ -143,10 +180,18 @@
                     pdf.addImage(imgInfo.dataUrl, 'JPEG', 0, 0, imgInfo.width, imgInfo.height);
                 }
 
-                // 3. 儲存 PDF 到手機
-                status.innerText = '3/3 正在生成 PDF 檔案...';
-                pdf.save(`${code}.pdf`);
-                status.innerText = `✅ 完成！已下載 ${code}.pdf（共 ${total} 頁原圖）`;
+                status.innerText = '3/3 正在儲存 PDF 與 PNG 封面...';
+                
+                // 先下載 PNG 封面
+                if (coverPngBlob) {
+                    triggerDownload(coverPngBlob, `${safeTitle}_封面.png`);
+                }
+
+                // 間隔 0.8 秒再下載 PDF，防止 iPhone Safari 阻擋連續下載
+                await new Promise(r => setTimeout(r, 800));
+                pdf.save(`${safeTitle}.pdf`);
+
+                status.innerText = `✅ 完成！已下載：\n${safeTitle}.pdf\n${safeTitle}_封面.png`;
             } catch (err) {
                 status.innerText = `❌ 錯誤：${err.message}`;
             } finally {
