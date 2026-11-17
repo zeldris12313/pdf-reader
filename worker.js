@@ -1,255 +1,222 @@
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "*",
-};
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>全能漫畫轉 PDF</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #121212; color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 16px; box-sizing: border-box; }
+        .card { background: #1e1e1e; padding: 1.8rem; border-radius: 16px; width: 100%; max-width: 420px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem; }
+        h2 { margin: 0; font-size: 1.3rem; }
+        .sub { font-size: 0.8rem; color: #888; margin-bottom: 1.2rem; line-height: 1.4; }
+        .gear-btn { background: #2c2c2c; border: none; color: #fff; padding: 8px 12px; border-radius: 8px; font-size: 0.85rem; cursor: pointer; }
+        input { width: 100%; padding: 14px; font-size: 1rem; border-radius: 10px; border: 1px solid #333; background: #2c2c2c; color: #fff; box-sizing: border-box; margin-bottom: 1rem; }
+        button.primary { width: 100%; padding: 14px; font-size: 1.05rem; font-weight: bold; border-radius: 10px; border: none; background: #ed2553; color: white; cursor: pointer; }
+        button.primary:disabled { background: #555; }
+        #status { margin-top: 1rem; font-size: 0.9rem; color: #bbb; text-align: center; min-height: 1.4rem; line-height: 1.5; word-break: break-word; white-space: pre-line; }
+        #result-box { display: none; margin-top: 1.2rem; padding: 1rem; background: #262626; border-radius: 12px; border: 1px solid #383838; }
+        .book-title { font-size: 0.95rem; font-weight: bold; color: #fff; margin-bottom: 0.9rem; line-height: 1.4; word-break: break-word; }
+        .dl-btn { width: 100%; padding: 12px; font-size: 1rem; font-weight: bold; border-radius: 10px; border: none; color: #fff; cursor: pointer; margin-bottom: 0.6rem; display: flex; justify-content: center; align-items: center; gap: 6px; }
+        .dl-pdf { background: #2ea043; }
+        .dl-png { background: #1f6feb; margin-bottom: 0; }
+        #settings-panel { display: none; margin-top: 1.2rem; padding-top: 1.2rem; border-top: 1px solid #333; }
+        label { display: block; font-size: 0.85rem; color: #bbb; margin-bottom: 6px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="header">
+            <h2>全能漫畫轉 PDF</h2>
+            <button class="gear-btn" onclick="toggleSettings()">⚙️ 設定中轉站</button>
+        </div>
+        <div class="sub">支援：nhentai 番號 / MyReadingManga / E-Hentai 網址</div>
 
-const HEADERS = {
-  "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
-  "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-};
+        <input type="text" id="query" placeholder="輸入 6 位番號 或 貼上完整作品網址">
+        <button class="primary" id="btn" onclick="startProcess()">開始讀取並製作檔案</button>
+        <div id="status">準備就緒，請輸入番號或網址</div>
 
-function decodeHtml(str) {
-  return (str || "")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#039;|&#39;/g, "'")
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(dec));
-}
+        <div id="result-box">
+            <div class="book-title" id="display-title"></div>
+            <button class="dl-btn dl-pdf" onclick="saveFile('pdf')">📄 儲存／下載 PDF</button>
+            <button class="dl-btn dl-png" onclick="saveFile('png')">🖼️ 儲存／下載封面 PNG</button>
+        </div>
 
-function sanitize(name) {
-  const clean = decodeHtml(name)
-    .replace(/<[^>]+>/g, "")
-    .replace(/[\\/*?:"<>|\r\n]+/g, "_")
-    .replace(/\s+/g, " ")
-    .trim();
-  return clean ? clean.slice(0, 110) : "manga";
-}
+        <div id="settings-panel">
+            <label>Cloudflare Worker 中轉站網址</label>
+            <input type="url" id="worker-url" placeholder="https://tight-brook-0a4c.zeldris12313.workers.dev">
+            <button class="primary" style="background:#2ea043;" onclick="saveSettings()">儲存網址</button>
+        </div>
+    </div>
 
-// 附帶 8 秒超時保護嘅 fetch，防止死等卡住
-async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(id);
-  }
-}
+    <script>
+        const DEFAULT_WORKER = "https://tight-brook-0a4c.zeldris12313.workers.dev";
+        let readyFiles = { pdf: null, png: null };
+        let wakeLock = null;
+        let isRunning = false;
 
-async function smartFetch(targetUrl, referer = "https://nhentai.net/") {
-  try {
-    const directRes = await fetchWithTimeout(
-      targetUrl,
-      { headers: { ...HEADERS, Referer: referer } },
-      8000
-    );
-    if (directRes.ok) return directRes;
-    if (directRes.status !== 429 && directRes.status !== 403) return directRes;
-  } catch (_) {}
-
-  const encoded = encodeURIComponent(targetUrl);
-  const fallbacks = [
-    `https://corsproxy.io/?${encoded}`,
-    `https://api.allorigins.win/raw?url=${encoded}`,
-  ];
-
-  let lastRes = null;
-  for (const proxyUrl of fallbacks) {
-    try {
-      const res = await fetchWithTimeout(
-        proxyUrl,
-        { headers: { "User-Agent": HEADERS["User-Agent"] } },
-        8000
-      );
-      if (res.ok) return res;
-      lastRes = res;
-    } catch (_) {}
-  }
-  return lastRes || new Response("連線超時或被目標網站限制 (429/403)", { status: 502 });
-}
-
-// 解析 nhentai
-async function parseNhentai(code) {
-  const res = await smartFetch(`https://nhentai.net/g/${code}/`, "https://nhentai.net/");
-  if (!res.ok) throw new Error(`nhentai 讀取失敗 (${res.status})`);
-  const html = await res.text();
-
-  const ogMatch =
-    html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
-    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
-  const h2Match = html.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
-  const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-  const pageTitleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
-
-  let title = "";
-  if (ogMatch && ogMatch[1].trim()) title = ogMatch[1];
-  else if (h2Match && h2Match[1].replace(/<[^>]+>/g, "").trim()) title = h2Match[1];
-  else if (h1Match && h1Match[1].replace(/<[^>]+>/g, "").trim()) title = h1Match[1];
-  else if (pageTitleMatch) title = pageTitleMatch[1].replace(/\s*-\s*nhentai.*$/i, "");
-  else title = code;
-
-  const extMap = { j: "jpg", p: "png", g: "gif", w: "webp" };
-  const servers = ["https://i.nhentai.net", "https://i2.nhentai.net", "https://i3.nhentai.net"];
-  const urls = [];
-
-  const jsonMatch = html.match(/window\._gallery\s*=\s*JSON\.parse\((['"])(.+?)\1\)/);
-  if (jsonMatch) {
-    try {
-      const raw = jsonMatch[1] === "'" ? jsonMatch[2].replace(/\\'/g, "'") : JSON.parse(`"${jsonMatch[2]}"`);
-      const data = JSON.parse(raw);
-      title = (data.title && (data.title.japanese || data.title.english || data.title.pretty)) || title;
-      const pages = (data.images && data.images.pages) || [];
-      pages.forEach((p, idx) => {
-        const ext = extMap[p.t] || "jpg";
-        urls.push(`${servers[idx % servers.length]}/galleries/${data.media_id}/${idx + 1}.${ext}`);
-      });
-    } catch (_) {}
-  }
-
-  if (urls.length === 0) {
-    const regex = /\/galleries\/(\d+)\/(\d+)t\.(jpg|png|gif|webp)/gi;
-    let m;
-    while ((m = regex.exec(html)) !== null) {
-      const u = `${servers[urls.length % servers.length]}/galleries/${m[1]}/${m[2]}.${m[3]}`;
-      if (!urls.includes(u)) urls.push(u);
-    }
-  }
-  if (urls.length === 0) throw new Error("找不到 nhentai 圖片");
-  return { title: sanitize(title), urls, referer: "https://nhentai.net/" };
-}
-
-// 解析 MyReadingManga
-async function parseMRM(url) {
-  const res = await smartFetch(url, "https://myreadingmanga.info/");
-  if (!res.ok) throw new Error(`MyReadingManga 讀取失敗 (${res.status})`);
-  const html = await res.text();
-  const h1Match = html.match(/<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([\s\S]*?)<\/h1>/i);
-  const pageTitleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
-  const title = h1Match
-    ? h1Match[1]
-    : pageTitleMatch
-    ? pageTitleMatch[1].replace(/\s*[-|]\s*MyReadingManga.*$/i, "")
-    : "MyReadingManga";
-
-  const urls = [];
-  const imgRegex = /<img[^>]+(?:data-src|data-lazy-src|src)=["']([^"']+)["']/gi;
-  let m;
-  while ((m = imgRegex.exec(html)) !== null) {
-    let src = m[1];
-    if (src.startsWith("//")) src = "https:" + src;
-    if (src.startsWith("http") && !/avatar|logo|icon|blank\.gif|gravatar|wp-includes/i.test(src)) {
-      if (!urls.includes(src)) urls.push(src);
-    }
-  }
-  if (urls.length === 0) throw new Error("找不到 MyReadingManga 圖片（可能受防護盾阻擋）");
-  return { title: sanitize(title), urls, referer: url };
-}
-
-// 解析 E-Hentai（先回傳閱讀頁連結，由前端逐頁解析原圖，避免 Worker 超時）
-async function parseEHentai(url) {
-  let base = url.split("?")[0];
-  if (!base.endsWith("/")) base += "/";
-  const ehHeaders = { ...HEADERS, Referer: "https://e-hentai.org/", Cookie: "nw=1" };
-
-  const res = await fetchWithTimeout(`${base}?nw=always`, { headers: ehHeaders }, 10000);
-  if (!res.ok) throw new Error(`E-Hentai 讀取失敗 (${res.status})`);
-  const html = await res.text();
-
-  const gj = html.match(/<h1 id="gj">([\s\S]*?)<\/h1>/i);
-  const gn = html.match(/<h1 id="gn">([\s\S]*?)<\/h1>/i);
-  const title = (gj && gj[1].trim()) || (gn && gn[1].trim()) || "EHentai";
-
-  let maxPage = 0;
-  const pageMatches = [...html.matchAll(/\?p=(\d+)/g)];
-  pageMatches.forEach((m) => {
-    maxPage = Math.max(maxPage, parseInt(m[1], 10));
-  });
-
-  const readerLinks = [];
-  for (let p = 0; p <= maxPage; p++) {
-    const pHtml =
-      p === 0
-        ? html
-        : await (await fetchWithTimeout(`${base}?p=${p}&nw=always`, { headers: ehHeaders }, 10000)).text();
-    const sRegex = /https:\/\/e-hentai\.org\/s\/[a-z0-9]+\/\d+-\d+/gi;
-    let sm;
-    while ((sm = sRegex.exec(pHtml)) !== null) {
-      if (!readerLinks.includes(sm[0])) readerLinks.push(sm[0]);
-    }
-  }
-  if (readerLinks.length === 0) throw new Error("找不到 E-Hentai 閱讀連結");
-  return { title: sanitize(title), urls: readerLinks, referer: "https://e-hentai.org/", mode: "eh_pages" };
-}
-
-export default {
-  async fetch(request) {
-    if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
-    const url = new URL(request.url);
-
-    // 即時解析作品目錄並直接回傳清單
-    if (url.pathname === "/api/parse" && request.method === "POST") {
-      try {
-        const { query } = await request.json();
-        const q = (query || "").trim();
-        let data;
-        if (/^\d+$/.test(q)) {
-          data = await parseNhentai(q);
-        } else if (q.includes("nhentai.net/g/")) {
-          const m = q.match(/\/g\/(\d+)/);
-          data = await parseNhentai(m[1]);
-        } else if (q.includes("myreadingmanga.info")) {
-          data = await parseMRM(q);
-        } else if (q.includes("e-hentai.org/g/") || q.includes("exhentai.org/g/")) {
-          data = await parseEHentai(q.replace("exhentai.org", "e-hentai.org"));
-        } else {
-          throw new Error("請輸入 nhentai 番號、MyReadingManga 或 E-Hentai 網址");
+        function cleanWorkerUrl(raw) {
+            let u = (raw || "").replace(/\s+/g, "").trim();
+            if (!u) return DEFAULT_WORKER;
+            if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+            return u.replace(/\/+$/, "");
         }
-        return new Response(JSON.stringify({ ok: true, ...data }), {
-          headers: { ...CORS, "Content-Type": "application/json" },
-        });
-      } catch (e) {
-        return new Response(JSON.stringify({ ok: false, error: e.message }), {
-          status: 400,
-          headers: { ...CORS, "Content-Type": "application/json" },
-        });
-      }
-    }
 
-    // 單張圖片或 E-Hentai 單頁解析中轉
-    const targetUrl = url.searchParams.get("url");
-    const referer = url.searchParams.get("ref") || "https://nhentai.net/";
-    if (!targetUrl) return new Response("Missing url", { status: 400, headers: CORS });
+        window.onload = () => {
+            const saved = cleanWorkerUrl(localStorage.getItem('worker_url'));
+            localStorage.setItem('worker_url', saved);
+            document.getElementById('worker-url').value = saved;
+        };
 
-    try {
-      // 若為 E-Hentai 單頁閱讀網址，自動抽出真實原圖並下載
-      if (targetUrl.includes("e-hentai.org/s/")) {
-        const pageRes = await fetchWithTimeout(
-          targetUrl,
-          { headers: { ...HEADERS, Referer: "https://e-hentai.org/", Cookie: "nw=1" } },
-          10000
-        );
-        const pageHtml = await pageRes.text();
-        const imgMatch = pageHtml.match(/<img id="img"[^>]+src=["']([^"']+)["']/i);
-        if (!imgMatch) return new Response("無法解析 E-Hentai 原圖", { status: 502, headers: CORS });
-        const imgRes = await fetchWithTimeout(
-          imgMatch[1],
-          { headers: { ...HEADERS, Referer: targetUrl } },
-          12000
-        );
-        const newHeaders = new Headers(imgRes.headers);
-        Object.entries(CORS).forEach(([k, v]) => newHeaders.set(k, v));
-        return new Response(imgRes.body, { status: imgRes.status, headers: newHeaders });
-      }
+        function toggleSettings() {
+            const p = document.getElementById('settings-panel');
+            p.style.display = (p.style.display === 'none' || !p.style.display) ? 'block' : 'none';
+        }
 
-      const response = await smartFetch(targetUrl, referer);
-      const newHeaders = new Headers(response.headers);
-      Object.entries(CORS).forEach(([k, v]) => newHeaders.set(k, v));
-      return new Response(response.body, { status: response.status, headers: newHeaders });
-    } catch (err) {
-      return new Response(err.message, { status: 500, headers: CORS });
-    }
-  },
-};
+        function saveSettings() {
+            const cleaned = cleanWorkerUrl(document.getElementById('worker-url').value);
+            localStorage.setItem('worker_url', cleaned);
+            document.getElementById('worker-url').value = cleaned;
+            alert('✅ 已儲存！');
+            document.getElementById('settings-panel').style.display = 'none';
+        }
+
+        async function requestWakeLock() {
+            try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
+        }
+
+        function processImageBlob(blob, isCover) {
+            return new Promise((resolve, reject) => {
+                const url = URL.createObjectURL(blob);
+                const img = new Image();
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.naturalWidth;
+                    canvas.height = img.naturalHeight;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0);
+                    URL.revokeObjectURL(url);
+
+                    const baseResult = {
+                        dataUrl: canvas.toDataURL('image/jpeg', 0.92),
+                        width: img.naturalWidth,
+                        height: img.naturalHeight,
+                        coverPngBlob: null
+                    };
+                    if (isCover) {
+                        canvas.toBlob((pngBlob) => { baseResult.coverPngBlob = pngBlob; resolve(baseResult); }, 'image/png');
+                    } else {
+                        resolve(baseResult);
+                    }
+                };
+                img.onerror = () => reject(new Error('圖片解碼失敗（可能回傳了網頁而非圖片）'));
+                img.src = url;
+            });
+        }
+
+        async function saveFile(type) {
+            const item = readyFiles[type];
+            if (!item) return;
+            const file = new File([item.blob], item.filename, { type: item.mime });
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                try { await navigator.share({ files: [file] }); return; } catch (e) { if (e.name === 'AbortError') return; }
+            }
+            const url = URL.createObjectURL(item.blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = item.filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 5000);
+        }
+
+        async function startProcess() {
+            if (isRunning) return;
+            const workerUrl = cleanWorkerUrl(localStorage.getItem('worker_url'));
+            const query = document.getElementById('query').value.trim();
+            if (!query) return alert('請輸入番號或網址');
+
+            const btn = document.getElementById('btn');
+            const status = document.getElementById('status');
+            isRunning = true;
+            btn.disabled = true;
+            document.getElementById('result-box').style.display = 'none';
+            status.innerText = '1/3 正在識別網站並讀取目錄...';
+            await requestWakeLock();
+
+            try {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 15000);
+                const res = await fetch(`${workerUrl}/api/parse`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query }),
+                    signal: controller.signal
+                });
+                clearTimeout(timer);
+
+                // 先用純文字讀取回應，避免 Safari 解析非 JSON 時拋出 pattern 錯誤
+                const rawText = await res.text();
+                let data = null;
+                try {
+                    data = JSON.parse(rawText);
+                } catch (_) {
+                    throw new Error(`後端回應異常 (${res.status})：${rawText.slice(0, 80)}`);
+                }
+
+                if (!res.ok || !data.ok) {
+                    throw new Error(data.error || `讀取失敗 (${res.status})`);
+                }
+
+                const { title, urls, referer } = data;
+                const total = urls.length;
+                const { jsPDF } = window.jspdf;
+                let pdf = null;
+                let coverPngBlob = null;
+
+                for (let i = 0; i < total; i++) {
+                    const pageNum = i + 1;
+                    status.innerText = `2/3 《${title}》\n正在下載原圖 (${pageNum} / ${total} 頁)...`;
+                    const imgUrl = `${workerUrl}?url=${encodeURIComponent(urls[i])}&ref=${encodeURIComponent(referer)}`;
+                    const imgRes = await fetch(imgUrl);
+                    if (!imgRes.ok) throw new Error(`第 ${pageNum} 頁下載失敗 (${imgRes.status})`);
+
+                    const blob = await imgRes.blob();
+                    const isCover = (i === 0);
+                    const imgInfo = await processImageBlob(blob, isCover);
+                    if (isCover) coverPngBlob = imgInfo.coverPngBlob;
+
+                    const orientation = imgInfo.width > imgInfo.height ? 'l' : 'p';
+                    if (i === 0) {
+                        pdf = new jsPDF({ orientation, unit: 'px', format: [imgInfo.width, imgInfo.height] });
+                    } else {
+                        pdf.addPage([imgInfo.width, imgInfo.height], orientation);
+                    }
+                    pdf.addImage(imgInfo.dataUrl, 'JPEG', 0, 0, imgInfo.width, imgInfo.height);
+                }
+
+                status.innerText = '3/3 正在打包檔案...';
+                readyFiles.pdf = { blob: pdf.output('blob'), filename: `${title}.pdf`, mime: 'application/pdf' };
+                if (coverPngBlob) {
+                    readyFiles.png = { blob: coverPngBlob, filename: `${title}_封面.png`, mime: 'image/png' };
+                }
+
+                document.getElementById('display-title').innerText = `📚 ${title}（共 ${total} 頁）`;
+                document.getElementById('result-box').style.display = 'block';
+                status.innerText = '✅ 製作完成！請按下方按鈕儲存：';
+            } catch (err) {
+                const msg = err.name === 'AbortError' ? '連線超時（超過 15 秒未回應），請重試' : err.message;
+                status.innerText = `❌ 錯誤：${msg}`;
+            } finally {
+                isRunning = false;
+                btn.disabled = false;
+                if (wakeLock) { wakeLock.release(); wakeLock = null; }
+            }
+        }
+    </script>
+</body>
+</html>
