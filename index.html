@@ -5,20 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>全能漫畫轉 PDF</title>
+    <title>番號轉 PDF</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #121212; color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 16px; box-sizing: border-box; }
-        .card { background: #1e1e1e; padding: 1.8rem; border-radius: 16px; width: 100%; max-width: 420px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem; }
-        h2 { margin: 0; font-size: 1.25rem; }
-        .ver { font-size: 0.75rem; background: #2ea043; color: #fff; padding: 2px 6px; border-radius: 6px; vertical-align: middle; margin-left: 4px; }
-        .sub { font-size: 0.8rem; color: #888; margin-bottom: 1.2rem; line-height: 1.4; }
-        .gear-btn { background: #2c2c2c; border: none; color: #fff; padding: 8px 12px; border-radius: 8px; font-size: 0.85rem; cursor: pointer; }
-        input { width: 100%; padding: 14px; font-size: 1rem; border-radius: 10px; border: 1px solid #333; background: #2c2c2c; color: #fff; box-sizing: border-box; margin-bottom: 1rem; }
+        .card { background: #1e1e1e; padding: 1.8rem; border-radius: 16px; width: 100%; max-width: 400px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.2rem; }
+        h2 { margin: 0; font-size: 1.3rem; }
+        .gear-btn { background: #2c2c2c; border: none; color: #fff; padding: 8px 12px; border-radius: 8px; font-size: 0.9rem; cursor: pointer; }
+        input { width: 100%; padding: 14px; font-size: 1.1rem; border-radius: 10px; border: 1px solid #333; background: #2c2c2c; color: #fff; box-sizing: border-box; margin-bottom: 1rem; }
+        input[type="number"] { font-size: 1.3rem; text-align: center; letter-spacing: 2px; }
         button.primary { width: 100%; padding: 14px; font-size: 1.05rem; font-weight: bold; border-radius: 10px; border: none; background: #ed2553; color: white; cursor: pointer; }
         button.primary:disabled { background: #555; }
-        #status { margin-top: 1rem; font-size: 0.9rem; color: #bbb; text-align: center; min-height: 1.4rem; line-height: 1.5; word-break: break-word; white-space: pre-line; }
+        #status { margin-top: 1rem; font-size: 0.9rem; color: #aaa; text-align: center; min-height: 1.4rem; line-height: 1.5; word-break: break-word; white-space: pre-line; }
         #result-box { display: none; margin-top: 1.2rem; padding: 1rem; background: #262626; border-radius: 12px; border: 1px solid #383838; }
         .book-title { font-size: 0.95rem; font-weight: bold; color: #fff; margin-bottom: 0.9rem; line-height: 1.4; word-break: break-word; }
         .dl-btn { width: 100%; padding: 12px; font-size: 1rem; font-weight: bold; border-radius: 10px; border: none; color: #fff; cursor: pointer; margin-bottom: 0.6rem; display: flex; justify-content: center; align-items: center; gap: 6px; }
@@ -31,14 +30,13 @@
 <body>
     <div class="card">
         <div class="header">
-            <h2>全能漫畫轉 PDF <span class="ver">v3.0</span></h2>
+            <h2>番號轉 PDF 工具</h2>
             <button class="gear-btn" onclick="toggleSettings()">⚙️ 設定中轉站</button>
         </div>
-        <div class="sub">支援：nhentai 番號 / MyReadingManga / E-Hentai 網址</div>
 
-        <input type="text" id="query" placeholder="輸入 6 位番號 或 貼上完整作品網址">
+        <input type="number" id="code" placeholder="輸入番號 (例如 697515)" inputmode="numeric">
         <button class="primary" id="btn" onclick="startProcess()">開始讀取並製作檔案</button>
-        <div id="status">準備就緒，請輸入番號或網址</div>
+        <div id="status">準備就緒，請輸入番號</div>
 
         <div id="result-box">
             <div class="book-title" id="display-title"></div>
@@ -55,27 +53,13 @@
 
     <script>
         const DEFAULT_WORKER = "https://tight-brook-0a4c.zeldris12313.workers.dev";
+        const EXT_MAP = { j: 'jpg', p: 'png', g: 'gif', w: 'webp' };
+        const IMG_SERVERS = ['https://i.nhentai.net', 'https://i2.nhentai.net', 'https://i3.nhentai.net'];
         let readyFiles = { pdf: null, png: null };
         let wakeLock = null;
-        let isRunning = false;
-
-        // 白名單過濾，徹底清除隱藏字元、引號與非法格式
-        function cleanWorkerUrl(raw) {
-            let u = (raw || "").replace(/[^a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]/g, "");
-            u = u.replace(/^["']+|["']+$/g, "");
-            if (!u) return DEFAULT_WORKER;
-            if (!/^https?:\/\//i.test(u)) u = "https://" + u;
-            u = u.replace(/\/+$/, "");
-            try {
-                new URL(u);
-                return u;
-            } catch (_) {
-                return DEFAULT_WORKER;
-            }
-        }
 
         window.onload = () => {
-            const saved = cleanWorkerUrl(localStorage.getItem('worker_url'));
+            const saved = localStorage.getItem('worker_url') || DEFAULT_WORKER;
             localStorage.setItem('worker_url', saved);
             document.getElementById('worker-url').value = saved;
         };
@@ -86,15 +70,106 @@
         }
 
         function saveSettings() {
-            const cleaned = cleanWorkerUrl(document.getElementById('worker-url').value);
-            localStorage.setItem('worker_url', cleaned);
-            document.getElementById('worker-url').value = cleaned;
-            alert('✅ 已儲存網址：\n' + cleaned);
+            let url = document.getElementById('worker-url').value.trim();
+            if (url && !url.startsWith('http')) url = 'https://' + url;
+            if (url.endsWith('/')) url = url.slice(0, -1);
+            localStorage.setItem('worker_url', url || DEFAULT_WORKER);
+            alert('✅ 已儲存！');
             document.getElementById('settings-panel').style.display = 'none';
+        }
+
+        function sanitizeFilename(name) {
+            const txt = document.createElement('textarea');
+            txt.innerHTML = name || '';
+            return txt.value
+                .replace(/<[^>]+>/g, '')
+                .replace(/[\/\\?%*:|"<>]/g, '_')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .slice(0, 110);
         }
 
         async function requestWakeLock() {
             try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
+        }
+
+        // 多路線讀取網頁 HTML（避開單一 IP 403/429 限制）
+        async function fetchHtmlSmart(targetUrl, workerUrl) {
+            const encoded = encodeURIComponent(targetUrl);
+            const routes = [
+                `${workerUrl}?url=${encoded}`,
+                `https://api.allorigins.win/raw?url=${encoded}`,
+                `https://corsproxy.io/?${encoded}`,
+                `https://api.codetabs.com/v1/proxy?quest=${encoded}`
+            ];
+
+            for (const route of routes) {
+                try {
+                    const controller = new AbortController();
+                    const timer = setTimeout(() => controller.abort(), 8000);
+                    const res = await fetch(route, { signal: controller.signal });
+                    clearTimeout(timer);
+                    if (res.ok) {
+                        const text = await res.text();
+                        if (text.includes('/galleries/')) return text;
+                    }
+                } catch (_) {}
+            }
+            throw new Error('無法讀取作品頁面（所有節點均被限制）');
+        }
+
+        // 從官方頁面 HTML 抽出完整書名與主縮圖區原圖網址
+        function parseGalleryHtml(html, code) {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+
+            // 1. 提取書名（優先取日文 h2，其次 h1 或 og:title）
+            const h2 = doc.querySelector('h2.title');
+            const h1 = doc.querySelector('h1.title');
+            const og = doc.querySelector('meta[property="og:title"]');
+            let title = (h2 && h2.textContent.trim())
+                     || (h1 && h1.textContent.trim())
+                     || (og && og.getAttribute('content'))
+                     || code;
+
+            // 2. 優先解析內嵌 JSON
+            const jsonMatch = html.match(/window\._gallery\s*=\s*JSON\.parse\((['"])(.+?)\1\)/);
+            if (jsonMatch) {
+                try {
+                    const raw = jsonMatch[1] === "'" ? jsonMatch[2].replace(/\\'/g, "'") : JSON.parse(`"${jsonMatch[2]}"`);
+                    const data = JSON.parse(raw);
+                    if (String(data.id) === String(code)) {
+                        title = (data.title && (data.title.japanese || data.title.english || data.title.pretty)) || title;
+                        const pages = (data.images && data.images.pages) || [];
+                        if (pages.length > 0) {
+                            const urls = pages.map((p, idx) => {
+                                const ext = EXT_MAP[p.t] || 'jpg';
+                                return `${IMG_SERVERS[idx % IMG_SERVERS.length]}/galleries/${data.media_id}/${idx + 1}.${ext}`;
+                            });
+                            return { title: sanitizeFilename(title) || code, urls };
+                        }
+                    }
+                } catch (_) {}
+            }
+
+            // 3. 後備：只抓主縮圖區 #thumbnail-container（絕不抓底部推薦區）
+            const thumbs = doc.querySelectorAll('#thumbnail-container img');
+            const urls = [];
+            let lockedMediaId = null;
+
+            thumbs.forEach((img) => {
+                const src = img.getAttribute('data-src') || img.getAttribute('src') || '';
+                const m = src.match(/\/galleries\/(\d+)\/(\d+)t\.(jpg|png|gif|webp)/i);
+                if (m) {
+                    if (!lockedMediaId) lockedMediaId = m[1];
+                    if (m[1] === lockedMediaId) {
+                        const server = IMG_SERVERS[urls.length % IMG_SERVERS.length];
+                        urls.push(`${server}/galleries/${m[1]}/${m[2]}.${m[3]}`);
+                    }
+                }
+            });
+
+            if (urls.length === 0) throw new Error('找不到該番號的圖片列表');
+            return { title: sanitizeFilename(title) || code, urls };
         }
 
         function processImageBlob(blob, isCover) {
@@ -121,7 +196,7 @@
                         resolve(baseResult);
                     }
                 };
-                img.onerror = () => reject(new Error('圖片解碼失敗（中轉站回傳了非圖片內容）'));
+                img.onerror = () => reject(new Error('圖片解碼失敗'));
                 img.src = url;
             });
         }
@@ -144,60 +219,34 @@
         }
 
         async function startProcess() {
-            if (isRunning) return;
-            const workerUrl = cleanWorkerUrl(localStorage.getItem('worker_url'));
-            const query = document.getElementById('query').value.trim();
-            if (!query) return alert('請輸入番號或網址');
+            const workerUrl = localStorage.getItem('worker_url') || DEFAULT_WORKER;
+            const code = document.getElementById('code').value.trim();
+            if (!code) return alert('請輸入番號');
 
             const btn = document.getElementById('btn');
             const status = document.getElementById('status');
-            isRunning = true;
+            const resultBox = document.getElementById('result-box');
+
             btn.disabled = true;
-            document.getElementById('result-box').style.display = 'none';
+            resultBox.style.display = 'none';
+            readyFiles = { pdf: null, png: null };
+            status.innerText = '1/3 正在讀取作品資料與書名...';
             await requestWakeLock();
 
-            let currentStep = '1. 連線中轉站解析目錄';
-
             try {
-                const parseEndpoint = `${workerUrl}/api/parse`;
-                status.innerText = `1/3 正在連線中轉站解析目錄...\n(${workerUrl})`;
-
-                const controller = new AbortController();
-                const timer = setTimeout(() => controller.abort(), 15000);
-                const res = await fetch(parseEndpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query }),
-                    signal: controller.signal
-                });
-                clearTimeout(timer);
-
-                currentStep = '2. 讀取中轉站回傳資料';
-                const rawText = await res.text();
-                let data = null;
-                try {
-                    data = JSON.parse(rawText);
-                } catch (_) {
-                    throw new Error(`後端回應非 JSON (狀態碼 ${res.status})：\n${rawText.slice(0, 100)}`);
-                }
-
-                if (!res.ok || !data.ok) {
-                    throw new Error(data.error || `讀取失敗 (${res.status})`);
-                }
-
-                const { title, urls, referer } = data;
+                const html = await fetchHtmlSmart(`https://nhentai.net/g/${code}/`, workerUrl);
+                const { title, urls } = parseGalleryHtml(html, code);
                 const total = urls.length;
+
                 const { jsPDF } = window.jspdf;
                 let pdf = null;
                 let coverPngBlob = null;
 
                 for (let i = 0; i < total; i++) {
                     const pageNum = i + 1;
-                    currentStep = `3. 下載並處理第 ${pageNum}/${total} 頁`;
                     status.innerText = `2/3 《${title}》\n正在下載原圖 (${pageNum} / ${total} 頁)...`;
 
-                    const imgUrl = `${workerUrl}?url=${encodeURIComponent(urls[i])}&ref=${encodeURIComponent(referer)}`;
-                    const imgRes = await fetch(imgUrl);
+                    const imgRes = await fetch(`${workerUrl}?url=${encodeURIComponent(urls[i])}`);
                     if (!imgRes.ok) throw new Error(`第 ${pageNum} 頁下載失敗 (${imgRes.status})`);
 
                     const blob = await imgRes.blob();
@@ -214,7 +263,6 @@
                     pdf.addImage(imgInfo.dataUrl, 'JPEG', 0, 0, imgInfo.width, imgInfo.height);
                 }
 
-                currentStep = '4. 打包最終檔案';
                 status.innerText = '3/3 正在打包檔案...';
                 readyFiles.pdf = { blob: pdf.output('blob'), filename: `${title}.pdf`, mime: 'application/pdf' };
                 if (coverPngBlob) {
@@ -222,13 +270,11 @@
                 }
 
                 document.getElementById('display-title').innerText = `📚 ${title}（共 ${total} 頁）`;
-                document.getElementById('result-box').style.display = 'block';
+                resultBox.style.display = 'block';
                 status.innerText = '✅ 製作完成！請按下方按鈕儲存：';
             } catch (err) {
-                const msg = err.name === 'AbortError' ? '連線超時（超過 15 秒未回應）' : err.message;
-                status.innerText = `❌ 錯誤 [卡在：${currentStep}]：\n${msg}`;
+                status.innerText = `❌ 錯誤：${err.message}`;
             } finally {
-                isRunning = false;
                 btn.disabled = false;
                 if (wakeLock) { wakeLock.release(); wakeLock = null; }
             }
