@@ -33,7 +33,7 @@
             <h2>全能漫畫轉 PDF</h2>
             <button class="gear-btn" onclick="toggleSettings()">⚙️ 設定中轉站</button>
         </div>
-        <div class="sub">支援：nhentai 番號 / MyReadingManga / E-Hentai 網址<br>掃描目錄期間可自由切換其他 App，返嚟自動合成</div>
+        <div class="sub">支援：nhentai 番號 / MyReadingManga / E-Hentai 網址</div>
 
         <input type="text" id="query" placeholder="輸入 6 位番號 或 貼上完整作品網址">
         <button class="primary" id="btn" onclick="startProcess()">開始讀取並製作檔案</button>
@@ -56,29 +56,13 @@
         const DEFAULT_WORKER = "https://tight-brook-0a4c.zeldris12313.workers.dev";
         let readyFiles = { pdf: null, png: null };
         let wakeLock = null;
+        let isRunning = false;
 
         window.onload = () => {
             const saved = localStorage.getItem('worker_url') || DEFAULT_WORKER;
             localStorage.setItem('worker_url', saved);
             document.getElementById('worker-url').value = saved;
-
-            // 若剛才跳去其他 App，返嚟時自動接力下載已掃描好嘅清單
-            const pending = localStorage.getItem('pending_task');
-            if (pending) {
-                const { taskId, workerUrl } = JSON.parse(pending);
-                resumeTask(workerUrl, taskId);
-            }
         };
-
-        document.addEventListener("visibilitychange", () => {
-            if (document.visibilityState === "visible") {
-                const pending = localStorage.getItem('pending_task');
-                if (pending && !document.getElementById('btn').disabled) {
-                    const { taskId, workerUrl } = JSON.parse(pending);
-                    resumeTask(workerUrl, taskId);
-                }
-            }
-        });
 
         function toggleSettings() {
             const p = document.getElementById('settings-panel');
@@ -145,56 +129,36 @@
         }
 
         async function startProcess() {
+            if (isRunning) return;
             const workerUrl = localStorage.getItem('worker_url') || DEFAULT_WORKER;
             const query = document.getElementById('query').value.trim();
             if (!query) return alert('請輸入番號或網址');
 
             const btn = document.getElementById('btn');
             const status = document.getElementById('status');
+            isRunning = true;
             btn.disabled = true;
             document.getElementById('result-box').style.display = 'none';
-            status.innerText = '1/3 正在傳送任務到後台掃描（可隨時切換其他 App）...';
-
-            try {
-                const res = await fetch(`${workerUrl}/api/create`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query })
-                });
-                const { task_id } = await res.json();
-                localStorage.setItem('pending_task', JSON.stringify({ taskId: task_id, workerUrl }));
-                await resumeTask(workerUrl, task_id);
-            } catch (err) {
-                status.innerText = `❌ 錯誤：${err.message}`;
-                btn.disabled = false;
-            }
-        }
-
-        async function resumeTask(workerUrl, taskId) {
-            const btn = document.getElementById('btn');
-            const status = document.getElementById('status');
-            btn.disabled = true;
+            status.innerText = '1/3 正在識別網站並讀取目錄（最多 10 秒）...';
             await requestWakeLock();
 
             try {
-                // 輪詢後台掃描進度（特別針對 E-Hentai 多頁目錄）
-                let taskData = null;
-                while (true) {
-                    const stRes = await fetch(`${workerUrl}/api/status/${taskId}`);
-                    taskData = await stRes.json();
-                    if (taskData.status === 'running') {
-                        status.innerText = `⏳ ${taskData.progress}\n（你可安心跳去用其他 App，掃描完返嚟自動合併）`;
-                        await new Promise(r => setTimeout(r, 2000));
-                    } else if (taskData.status === 'error') {
-                        localStorage.removeItem('pending_task');
-                        throw new Error(taskData.progress);
-                    } else if (taskData.status === 'done') {
-                        localStorage.removeItem('pending_task');
-                        break;
-                    }
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 15000);
+                const res = await fetch(`${workerUrl}/api/parse`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query }),
+                    signal: controller.signal
+                });
+                clearTimeout(timer);
+
+                const data = await res.json();
+                if (!res.ok || !data.ok) {
+                    throw new Error(data.error || `讀取失敗 (${res.status})`);
                 }
 
-                const { title, urls, referer } = taskData;
+                const { title, urls, referer } = data;
                 const total = urls.length;
                 const { jsPDF } = window.jspdf;
                 let pdf = null;
@@ -202,7 +166,7 @@
 
                 for (let i = 0; i < total; i++) {
                     const pageNum = i + 1;
-                    status.innerText = `2/3 正在下載原圖 (${pageNum} / ${total} 頁)...`;
+                    status.innerText = `2/3 《${title}》\n正在下載原圖 (${pageNum} / ${total} 頁)...`;
                     const imgUrl = `${workerUrl}?url=${encodeURIComponent(urls[i])}&ref=${encodeURIComponent(referer)}`;
                     const imgRes = await fetch(imgUrl);
                     if (!imgRes.ok) throw new Error(`第 ${pageNum} 頁下載失敗 (${imgRes.status})`);
@@ -231,8 +195,10 @@
                 document.getElementById('result-box').style.display = 'block';
                 status.innerText = '✅ 製作完成！請按下方按鈕儲存：';
             } catch (err) {
-                status.innerText = `❌ 錯誤：${err.message}`;
+                const msg = err.name === 'AbortError' ? '連線超時（超過 15 秒未回應），請重試' : err.message;
+                status.innerText = `❌ 錯誤：${msg}`;
             } finally {
+                isRunning = false;
                 btn.disabled = false;
                 if (wakeLock) { wakeLock.release(); wakeLock = null; }
             }
