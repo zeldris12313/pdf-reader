@@ -10,11 +10,14 @@
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #121212; color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 16px; box-sizing: border-box; }
         .card { background: #1e1e1e; padding: 1.6rem; border-radius: 16px; width: 100%; max-width: 420px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap: 6px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; gap: 6px; }
         h2 { margin: 0; font-size: 1.2rem; }
         .top-btns { display: flex; gap: 6px; }
         .icon-btn { background: #2c2c2c; border: none; color: #fff; padding: 8px 10px; border-radius: 8px; font-size: 0.8rem; cursor: pointer; white-space: nowrap; }
         .icon-btn.warn { background: #3a2323; color: #ff7b72; }
+        .cache-bar { background: #262626; border: 1px solid #333; border-radius: 10px; padding: 8px 12px; font-size: 0.82rem; color: #aaa; display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+        .cache-val { font-weight: bold; color: #58a6ff; font-variant-numeric: tabular-nums; }
+        .cache-val.zero { color: #3fb950; }
         .guide { background: #262626; padding: 0.9rem; border-radius: 12px; font-size: 0.82rem; color: #ccc; line-height: 1.55; margin-bottom: 1rem; border: 1px solid #333; }
         button.primary { width: 100%; padding: 13px; font-size: 0.98rem; font-weight: bold; border-radius: 10px; border: none; background: #ed2553; color: white; cursor: pointer; }
         #status { margin-top: 0.9rem; font-size: 0.88rem; color: #bbb; text-align: center; min-height: 1.4rem; line-height: 1.5; word-break: break-word; white-space: pre-line; }
@@ -38,6 +41,11 @@
                 <button class="icon-btn warn" onclick="clearAllCache()">🧹 清緩存</button>
                 <button class="icon-btn" onclick="toggleSettings()">⚙️ 設定</button>
             </div>
+        </div>
+
+        <div class="cache-bar">
+            <span>目前暫存佔用（檔案 + 快取）</span>
+            <span class="cache-val zero" id="cache-size">0.00 MB</span>
         </div>
 
         <div class="guide">
@@ -71,16 +79,19 @@
         const DEFAULT_WORKER = "https://tight-brook-0a4c.zeldris12313.workers.dev";
         const NH_SERVERS = ['https://i.nhentai.net', 'https://i2.nhentai.net', 'https://i3.nhentai.net'];
         let readyFiles = { pdf: null, png: null, title: '' };
+        let activeObjectUrls = [];
         let wakeLock = null;
 
         const BOOKMARKLET_CODE = `javascript:(async()=>{const h=location.hostname,u='https://zeldris12313.github.io/pdf-reader/';const go=(d)=>{location.href=u+'#d='+encodeURIComponent(JSON.stringify(d))};if(h.includes('nhentai')){const t=(document.querySelector('h2.title')||document.querySelector('h1.title')||{innerText:document.title}).innerText;const imgs=[...document.querySelectorAll('#thumbnail-container img')];const urls=[];let mid=null;imgs.forEach(i=>{const s=i.dataset.src||i.src||'';const m=s.match(/\\/galleries\\/(\\d+)\\/(\\d+)t\\.(jpg|png|gif|webp)/i);if(m){if(!mid)mid=m[1];if(m[1]===mid)urls.push('https://i.nhentai.net/galleries/'+m[1]+'/'+m[2]+'.'+m[3])}});if(!urls.length)return alert('找不到圖片，請先進入作品介紹頁');go({title:t,urls})}else if(h.includes('myreadingmanga')){const t=(document.querySelector('h1.entry-title')||{innerText:document.title}).innerText;const urls=[...new Set([...document.querySelectorAll('.entry-content img')].map(i=>i.dataset.src||i.dataset.lazySrc||i.src).filter(s=>s&&s.startsWith('http')&&!/avatar|logo|icon|blank\\.gif/i.test(s)))];if(!urls.length)return alert('找不到圖片');go({title:t,urls})}else if(h.includes('e-hentai')||h.includes('exhentai')){const t=(document.querySelector('#gj')||document.querySelector('#gn')||{innerText:document.title}).innerText;const box=document.createElement('div');box.style='position:fixed;top:12px;left:12px;right:12px;z-index:999999;background:#ed2553;color:#fff;padding:14px;border-radius:12px;font-size:15px;font-weight:bold;text-align:center;box-shadow:0 4px 12px rgba(0,0,0,.5)';document.body.appendChild(box);const base=location.href.split('?')[0];let maxP=0;[...document.body.innerHTML.matchAll(/\\?p=(\\d+)/g)].forEach(m=>maxP=Math.max(maxP,+m[1]));const links=[];for(let p=0;p<=maxP;p++){box.innerText='掃描目錄頁 '+(p+1)+'/'+(maxP+1)+'...';const html=p===0?document.body.innerHTML:await(await fetch(base+'?p='+p)).text();[...html.matchAll(/https:\\/\\/e[x-]hentai\\.org\\/s\\/[a-z0-9]+\\/\\d+-\\d+/gi)].forEach(m=>{if(!links.includes(m[0]))links.push(m[0])})}const urls=[];for(let i=0;i<links.length;i++){box.innerText='解析原圖 '+(i+1)+'/'+links.length+'...';const html=await(await fetch(links[i])).text();const m=html.match(/<img id="img"[^>]+src="([^"]+)"/i);if(m)urls.push(m[1])}box.remove();if(!urls.length)return alert('找不到原圖');go({title:t,urls})}else{alert('請在 nhentai、E-Hentai 或 MyReadingManga 作品頁面按此書籤')}})();`;
 
-        window.onload = () => {
+        window.onload = async () => {
             const saved = localStorage.getItem('worker_url') || DEFAULT_WORKER;
             localStorage.setItem('worker_url', saved);
             document.getElementById('worker-url').value = saved;
             document.getElementById('tg-token').value = localStorage.getItem('tg_token') || '';
             document.getElementById('tg-chat-id').value = localStorage.getItem('tg_chat_id') || '';
+
+            await updateCacheDisplay();
 
             if (location.hash.startsWith('#d=')) {
                 try {
@@ -93,10 +104,50 @@
             }
         };
 
-        // 一鍵清除網頁快取與記憶體暫存並強制重載
+        // 計算並即時更新目前緩存大小（記憶體檔案 + 瀏覽器快取）
+        async function updateCacheDisplay(justCleared = false) {
+            let totalBytes = 0;
+            if (readyFiles.pdf && readyFiles.pdf.blob) totalBytes += readyFiles.pdf.blob.size;
+            if (readyFiles.png && readyFiles.png.blob) totalBytes += readyFiles.png.blob.size;
+
+            if ('caches' in window) {
+                try {
+                    const keys = await caches.keys();
+                    for (const k of keys) {
+                        const cache = await caches.open(k);
+                        const reqs = await cache.keys();
+                        for (const req of reqs) {
+                            const res = await cache.match(req);
+                            if (res) {
+                                const buf = await res.clone().arrayBuffer();
+                                totalBytes += buf.byteLength;
+                            }
+                        }
+                    }
+                } catch (_) {}
+            }
+
+            const mb = (totalBytes / (1024 * 1024)).toFixed(2);
+            const el = document.getElementById('cache-size');
+            if (justCleared && totalBytes === 0) {
+                el.innerText = '0.00 MB ✅ 已清空';
+                el.className = 'cache-val zero';
+            } else if (totalBytes === 0) {
+                el.innerText = '0.00 MB';
+                el.className = 'cache-val zero';
+            } else {
+                el.innerText = `${mb} MB`;
+                el.className = 'cache-val';
+            }
+        }
+
+        // 一鍵清除所有暫存檔案與瀏覽器快取並即時更新畫面
         async function clearAllCache() {
+            activeObjectUrls.forEach(u => URL.revokeObjectURL(u));
+            activeObjectUrls = [];
             readyFiles = { pdf: null, png: null, title: '' };
             sessionStorage.clear();
+
             if ('caches' in window) {
                 const keys = await caches.keys();
                 await Promise.all(keys.map(k => caches.delete(k)));
@@ -105,7 +156,10 @@
                 const regs = await navigator.serviceWorker.getRegistrations();
                 await Promise.all(regs.map(r => r.unregister()));
             }
-            location.replace(location.pathname + '?v=' + Date.now());
+
+            document.getElementById('result-box').style.display = 'none';
+            document.getElementById('status').innerText = '🧹 所有暫存 PDF、封面圖與快取已清空';
+            await updateCacheDisplay(true);
         }
 
         async function copyBookmarklet() {
@@ -174,7 +228,6 @@
             });
         }
 
-        // 1. 一鍵加到 Telegram（僅傳送 PDF 檔）
         async function sendPdfToTelegram() {
             const item = readyFiles.pdf;
             if (!item) return;
@@ -182,7 +235,6 @@
             const botToken = (localStorage.getItem('tg_token') || '').trim();
             const chatId = (localStorage.getItem('tg_chat_id') || '').trim();
 
-            // 若有設定 Bot Token，直接背景無彈窗射入 Telegram（上限 50MB）
             if (botToken && chatId) {
                 const tgBtn = document.getElementById('tg-btn');
                 const oldText = tgBtn.innerText;
@@ -208,7 +260,6 @@
                 }
             }
 
-            // 未填 Bot 或檔案超過 50MB 時，叫出系統分享選單（只帶 PDF 檔案）
             const file = new File([item.blob], item.filename, { type: item.mime });
             if (navigator.canShare && navigator.canShare({ files: [file] })) {
                 try {
@@ -221,7 +272,6 @@
             saveFile('pdf');
         }
 
-        // 2. 分享封面 PNG 到 X (Twitter)
         async function shareCoverToX() {
             const item = readyFiles.png;
             if (!item) return;
@@ -248,13 +298,13 @@
                 try { await navigator.share({ files: [file] }); return; } catch (e) { if (e.name === 'AbortError') return; }
             }
             const url = URL.createObjectURL(item.blob);
+            activeObjectUrls.push(url);
             const a = document.createElement('a');
             a.href = url;
             a.download = item.filename;
             document.body.appendChild(a);
             a.click();
             a.remove();
-            setTimeout(() => URL.revokeObjectURL(url), 5000);
         }
 
         async function buildPdfFromPayload(payload) {
@@ -268,6 +318,7 @@
             const resultBox = document.getElementById('result-box');
             resultBox.style.display = 'none';
             readyFiles = { pdf: null, png: null, title };
+            await updateCacheDisplay();
             await requestWakeLock();
 
             try {
@@ -307,6 +358,7 @@
                     readyFiles.png = { blob: coverPngBlob, filename: `${title}_封面.png`, mime: 'image/png' };
                 }
 
+                await updateCacheDisplay();
                 document.getElementById('display-title').innerText = `📚 ${title}（共 ${total} 頁）`;
                 resultBox.style.display = 'block';
                 status.innerText = '✅ 製作完成！';
