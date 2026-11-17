@@ -9,34 +9,40 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #121212; color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 16px; box-sizing: border-box; }
-        .card { background: #1e1e1e; padding: 1.8rem; border-radius: 16px; width: 100%; max-width: 420px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
-        h2 { margin: 0; font-size: 1.3rem; }
-        .gear-btn { background: #2c2c2c; border: none; color: #fff; padding: 8px 12px; border-radius: 8px; font-size: 0.85rem; cursor: pointer; }
-        .guide { background: #262626; padding: 1rem; border-radius: 12px; font-size: 0.85rem; color: #ccc; line-height: 1.6; margin-bottom: 1rem; border: 1px solid #333; }
-        button.primary { width: 100%; padding: 14px; font-size: 1rem; font-weight: bold; border-radius: 10px; border: none; background: #ed2553; color: white; cursor: pointer; }
-        #status { margin-top: 1rem; font-size: 0.9rem; color: #bbb; text-align: center; min-height: 1.4rem; line-height: 1.5; word-break: break-word; white-space: pre-line; }
-        #result-box { display: none; margin-top: 1.2rem; padding: 1rem; background: #262626; border-radius: 12px; border: 1px solid #383838; }
-        .book-title { font-size: 0.95rem; font-weight: bold; color: #fff; margin-bottom: 0.9rem; line-height: 1.4; word-break: break-word; }
-        .dl-btn { width: 100%; padding: 12px; font-size: 1rem; font-weight: bold; border-radius: 10px; border: none; color: #fff; cursor: pointer; margin-bottom: 0.6rem; display: flex; justify-content: center; align-items: center; gap: 6px; }
+        .card { background: #1e1e1e; padding: 1.6rem; border-radius: 16px; width: 100%; max-width: 420px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap: 6px; }
+        h2 { margin: 0; font-size: 1.2rem; }
+        .top-btns { display: flex; gap: 6px; }
+        .icon-btn { background: #2c2c2c; border: none; color: #fff; padding: 8px 10px; border-radius: 8px; font-size: 0.8rem; cursor: pointer; white-space: nowrap; }
+        .icon-btn.warn { background: #3a2323; color: #ff7b72; }
+        .guide { background: #262626; padding: 0.9rem; border-radius: 12px; font-size: 0.82rem; color: #ccc; line-height: 1.55; margin-bottom: 1rem; border: 1px solid #333; }
+        button.primary { width: 100%; padding: 13px; font-size: 0.98rem; font-weight: bold; border-radius: 10px; border: none; background: #ed2553; color: white; cursor: pointer; }
+        #status { margin-top: 0.9rem; font-size: 0.88rem; color: #bbb; text-align: center; min-height: 1.4rem; line-height: 1.5; word-break: break-word; white-space: pre-line; }
+        #result-box { display: none; margin-top: 1.1rem; padding: 1rem; background: #262626; border-radius: 12px; border: 1px solid #383838; }
+        .book-title { font-size: 0.92rem; font-weight: bold; color: #fff; margin-bottom: 0.85rem; line-height: 1.4; word-break: break-word; }
+        .dl-btn { width: 100%; padding: 12px; font-size: 0.95rem; font-weight: bold; border-radius: 10px; border: none; color: #fff; cursor: pointer; margin-bottom: 0.55rem; display: flex; justify-content: center; align-items: center; gap: 6px; }
+        .dl-tg { background: #24A1DE; }
+        .dl-x { background: #000000; border: 1px solid #444; }
         .dl-pdf { background: #2ea043; }
         .dl-png { background: #1f6feb; margin-bottom: 0; }
-        #settings-panel { display: none; margin-top: 1.2rem; padding-top: 1.2rem; border-top: 1px solid #333; }
-        input { width: 100%; padding: 12px; font-size: 0.95rem; border-radius: 10px; border: 1px solid #333; background: #2c2c2c; color: #fff; box-sizing: border-box; margin-bottom: 0.8rem; }
-        label { display: block; font-size: 0.85rem; color: #bbb; margin-bottom: 6px; }
+        #settings-panel { display: none; margin-top: 1.1rem; padding-top: 1.1rem; border-top: 1px solid #333; }
+        input { width: 100%; padding: 11px; font-size: 0.9rem; border-radius: 10px; border: 1px solid #333; background: #2c2c2c; color: #fff; box-sizing: border-box; margin-bottom: 0.75rem; }
+        label { display: block; font-size: 0.8rem; color: #bbb; margin-bottom: 4px; }
     </style>
 </head>
 <body>
     <div class="card">
         <div class="header">
-            <h2>全能漫畫轉 PDF</h2>
-            <button class="gear-btn" onclick="toggleSettings()">⚙️ 設定中轉站</button>
+            <h2>漫畫轉 PDF</h2>
+            <div class="top-btns">
+                <button class="icon-btn warn" onclick="clearAllCache()">🧹 清緩存</button>
+                <button class="icon-btn" onclick="toggleSettings()">⚙️ 設定</button>
+            </div>
         </div>
 
         <div class="guide">
-            <strong>使用方法（免受 403/429 限制）：</strong><br>
-            1. 按下方按鈕複製「一鍵抓圖書籤代碼」並存成 Safari 書籤。<br>
-            2. 在 Safari 打開 <b>nhentai / E-Hentai / MyReadingManga</b> 作品頁，點一下該書籤即自動跳轉並合成 PDF！
+            1. 複製書籤代碼並存成 Safari 書籤。<br>
+            2. 喺 <b>nhentai / E-Hentai / MyReadingManga</b> 作品頁點一下書籤即自動生成檔案。
         </div>
 
         <button class="primary" onclick="copyBookmarklet()">📋 一鍵複製 Safari 書籤代碼</button>
@@ -44,30 +50,37 @@
 
         <div id="result-box">
             <div class="book-title" id="display-title"></div>
-            <button class="dl-btn dl-pdf" onclick="saveFile('pdf')">📄 儲存／下載 PDF</button>
-            <button class="dl-btn dl-png" onclick="saveFile('png')">🖼️ 儲存／下載封面 PNG</button>
+            <button class="dl-btn dl-tg" id="tg-btn" onclick="sendPdfToTelegram()">✈️ 一鍵傳送 PDF 到 Telegram</button>
+            <button class="dl-btn dl-x" onclick="shareCoverToX()">𝕏 分享封面圖到 X (Twitter)</button>
+            <button class="dl-btn dl-pdf" onclick="saveFile('pdf')">📄 本機儲存 PDF</button>
+            <button class="dl-btn dl-png" onclick="saveFile('png')">🖼️ 本機儲存封面 PNG</button>
         </div>
 
         <div id="settings-panel">
             <label>Cloudflare Worker 中轉站網址</label>
             <input type="url" id="worker-url" placeholder="https://tight-brook-0a4c.zeldris12313.workers.dev">
-            <button class="primary" style="background:#2ea043;" onclick="saveSettings()">儲存網址</button>
+            <label>Telegram Bot Token（選填：填咗可免選單直傳 PDF）</label>
+            <input type="text" id="tg-token" placeholder="例如 123456789:AAH...">
+            <label>Telegram Chat ID（選填：你嘅 User ID 或頻道 ID）</label>
+            <input type="text" id="tg-chat-id" placeholder="例如 987654321 或 -100123456789">
+            <button class="primary" style="background:#2ea043;" onclick="saveSettings()">儲存設定</button>
         </div>
     </div>
 
     <script>
         const DEFAULT_WORKER = "https://tight-brook-0a4c.zeldris12313.workers.dev";
         const NH_SERVERS = ['https://i.nhentai.net', 'https://i2.nhentai.net', 'https://i3.nhentai.net'];
-        let readyFiles = { pdf: null, png: null };
+        let readyFiles = { pdf: null, png: null, title: '' };
         let wakeLock = null;
 
-        // 支援 nhentai / E-Hentai / MyReadingManga 的三合一書籤腳本
         const BOOKMARKLET_CODE = `javascript:(async()=>{const h=location.hostname,u='https://zeldris12313.github.io/pdf-reader/';const go=(d)=>{location.href=u+'#d='+encodeURIComponent(JSON.stringify(d))};if(h.includes('nhentai')){const t=(document.querySelector('h2.title')||document.querySelector('h1.title')||{innerText:document.title}).innerText;const imgs=[...document.querySelectorAll('#thumbnail-container img')];const urls=[];let mid=null;imgs.forEach(i=>{const s=i.dataset.src||i.src||'';const m=s.match(/\\/galleries\\/(\\d+)\\/(\\d+)t\\.(jpg|png|gif|webp)/i);if(m){if(!mid)mid=m[1];if(m[1]===mid)urls.push('https://i.nhentai.net/galleries/'+m[1]+'/'+m[2]+'.'+m[3])}});if(!urls.length)return alert('找不到圖片，請先進入作品介紹頁');go({title:t,urls})}else if(h.includes('myreadingmanga')){const t=(document.querySelector('h1.entry-title')||{innerText:document.title}).innerText;const urls=[...new Set([...document.querySelectorAll('.entry-content img')].map(i=>i.dataset.src||i.dataset.lazySrc||i.src).filter(s=>s&&s.startsWith('http')&&!/avatar|logo|icon|blank\\.gif/i.test(s)))];if(!urls.length)return alert('找不到圖片');go({title:t,urls})}else if(h.includes('e-hentai')||h.includes('exhentai')){const t=(document.querySelector('#gj')||document.querySelector('#gn')||{innerText:document.title}).innerText;const box=document.createElement('div');box.style='position:fixed;top:12px;left:12px;right:12px;z-index:999999;background:#ed2553;color:#fff;padding:14px;border-radius:12px;font-size:15px;font-weight:bold;text-align:center;box-shadow:0 4px 12px rgba(0,0,0,.5)';document.body.appendChild(box);const base=location.href.split('?')[0];let maxP=0;[...document.body.innerHTML.matchAll(/\\?p=(\\d+)/g)].forEach(m=>maxP=Math.max(maxP,+m[1]));const links=[];for(let p=0;p<=maxP;p++){box.innerText='掃描目錄頁 '+(p+1)+'/'+(maxP+1)+'...';const html=p===0?document.body.innerHTML:await(await fetch(base+'?p='+p)).text();[...html.matchAll(/https:\\/\\/e[x-]hentai\\.org\\/s\\/[a-z0-9]+\\/\\d+-\\d+/gi)].forEach(m=>{if(!links.includes(m[0]))links.push(m[0])})}const urls=[];for(let i=0;i<links.length;i++){box.innerText='解析原圖 '+(i+1)+'/'+links.length+'...';const html=await(await fetch(links[i])).text();const m=html.match(/<img id="img"[^>]+src="([^"]+)"/i);if(m)urls.push(m[1])}box.remove();if(!urls.length)return alert('找不到原圖');go({title:t,urls})}else{alert('請在 nhentai、E-Hentai 或 MyReadingManga 作品頁面按此書籤')}})();`;
 
         window.onload = () => {
             const saved = localStorage.getItem('worker_url') || DEFAULT_WORKER;
             localStorage.setItem('worker_url', saved);
             document.getElementById('worker-url').value = saved;
+            document.getElementById('tg-token').value = localStorage.getItem('tg_token') || '';
+            document.getElementById('tg-chat-id').value = localStorage.getItem('tg_chat_id') || '';
 
             if (location.hash.startsWith('#d=')) {
                 try {
@@ -80,10 +93,25 @@
             }
         };
 
+        // 一鍵清除網頁快取與記憶體暫存並強制重載
+        async function clearAllCache() {
+            readyFiles = { pdf: null, png: null, title: '' };
+            sessionStorage.clear();
+            if ('caches' in window) {
+                const keys = await caches.keys();
+                await Promise.all(keys.map(k => caches.delete(k)));
+            }
+            if ('serviceWorker' in navigator) {
+                const regs = await navigator.serviceWorker.getRegistrations();
+                await Promise.all(regs.map(r => r.unregister()));
+            }
+            location.replace(location.pathname + '?v=' + Date.now());
+        }
+
         async function copyBookmarklet() {
             try {
                 await navigator.clipboard.writeText(BOOKMARKLET_CODE);
-                alert('✅ 已複製書籤代碼！\n\n接下來請在 Safari 將任意網頁「加入書籤」，然後按「編輯」把網址列換成剛複製的代碼即可。');
+                alert('✅ 已複製書籤代碼！');
             } catch (_) {
                 prompt('請全選複製以下代碼並存成 Safari 書籤網址：', BOOKMARKLET_CODE);
             }
@@ -99,7 +127,9 @@
             if (url && !url.startsWith('http')) url = 'https://' + url;
             if (url.endsWith('/')) url = url.slice(0, -1);
             localStorage.setItem('worker_url', url || DEFAULT_WORKER);
-            alert('✅ 已儲存！');
+            localStorage.setItem('tg_token', document.getElementById('tg-token').value.trim());
+            localStorage.setItem('tg_chat_id', document.getElementById('tg-chat-id').value.trim());
+            alert('✅ 設定已儲存！');
             document.getElementById('settings-panel').style.display = 'none';
         }
 
@@ -144,6 +174,72 @@
             });
         }
 
+        // 1. 一鍵加到 Telegram（僅傳送 PDF 檔）
+        async function sendPdfToTelegram() {
+            const item = readyFiles.pdf;
+            if (!item) return;
+
+            const botToken = (localStorage.getItem('tg_token') || '').trim();
+            const chatId = (localStorage.getItem('tg_chat_id') || '').trim();
+
+            // 若有設定 Bot Token，直接背景無彈窗射入 Telegram（上限 50MB）
+            if (botToken && chatId) {
+                const tgBtn = document.getElementById('tg-btn');
+                const oldText = tgBtn.innerText;
+                tgBtn.disabled = true;
+                tgBtn.innerText = '⏳ 正在傳送 PDF 至 Telegram...';
+                try {
+                    const fd = new FormData();
+                    fd.append('chat_id', chatId);
+                    fd.append('document', item.blob, item.filename);
+                    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
+                        method: 'POST',
+                        body: fd
+                    });
+                    const data = await res.json();
+                    if (!data.ok) throw new Error(data.description || '傳送失敗');
+                    tgBtn.innerText = '✅ 已傳送 PDF 到 Telegram！';
+                    setTimeout(() => { tgBtn.innerText = oldText; tgBtn.disabled = false; }, 3000);
+                    return;
+                } catch (err) {
+                    alert('Bot 直傳失敗（改用系統分享選單）：\n' + err.message);
+                    tgBtn.innerText = oldText;
+                    tgBtn.disabled = false;
+                }
+            }
+
+            // 未填 Bot 或檔案超過 50MB 時，叫出系統分享選單（只帶 PDF 檔案）
+            const file = new File([item.blob], item.filename, { type: item.mime });
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                try {
+                    await navigator.share({ files: [file] });
+                    return;
+                } catch (e) {
+                    if (e.name === 'AbortError') return;
+                }
+            }
+            saveFile('pdf');
+        }
+
+        // 2. 分享封面 PNG 到 X (Twitter)
+        async function shareCoverToX() {
+            const item = readyFiles.png;
+            if (!item) return;
+            const file = new File([item.blob], item.filename, { type: item.mime });
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                try {
+                    await navigator.share({
+                        files: [file],
+                        text: readyFiles.title
+                    });
+                    return;
+                } catch (e) {
+                    if (e.name === 'AbortError') return;
+                }
+            }
+            alert('此瀏覽器不支援直接帶圖分享，請先按下方儲存封面 PNG 再於 X 上傳。');
+        }
+
         async function saveFile(type) {
             const item = readyFiles[type];
             if (!item) return;
@@ -171,7 +267,7 @@
             const status = document.getElementById('status');
             const resultBox = document.getElementById('result-box');
             resultBox.style.display = 'none';
-            readyFiles = { pdf: null, png: null };
+            readyFiles = { pdf: null, png: null, title };
             await requestWakeLock();
 
             try {
@@ -183,7 +279,6 @@
                     const pageNum = i + 1;
                     status.innerText = `《${title}》\n正在下載原圖 (${pageNum} / ${total} 頁)...`;
 
-                    // 若為 nhentai 圖片則輪流分散至 i / i2 / i3 伺服器加速下載
                     let targetImg = urls[i];
                     if (targetImg.includes('i.nhentai.net')) {
                         targetImg = targetImg.replace('https://i.nhentai.net', NH_SERVERS[i % NH_SERVERS.length]);
@@ -214,7 +309,7 @@
 
                 document.getElementById('display-title').innerText = `📚 ${title}（共 ${total} 頁）`;
                 resultBox.style.display = 'block';
-                status.innerText = '✅ 製作完成！請按下方按鈕儲存：';
+                status.innerText = '✅ 製作完成！';
             } catch (err) {
                 status.innerText = `❌ 錯誤：${err.message}`;
             } finally {
