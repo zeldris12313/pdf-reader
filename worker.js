@@ -39,55 +39,62 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 9000) {
   }
 }
 
-// 解析 nhentai（主站遇 403/429 自動輪換同源鏡像站）
-async function parseNhentai(code) {
-  const sources = [
-    { page: `https://nhentai.net/g/${code}/`, ref: "https://nhentai.net/" },
-    { page: `https://nhentai.to/g/${code}/`, ref: "https://nhentai.to/" },
-    { page: `https://nhentai.xxx/g/${code}/`, ref: "https://nhentai.xxx/" },
-    { page: `https://nhentai.website/g/${code}/`, ref: "https://nhentai.website/" },
+// 僅針對官方目標網址抓取值，遇 IP 限制時改用中繼節點讀取同一網址（確保番號 100% 一致）
+async function fetchTargetPage(targetUrl, referer) {
+  try {
+    const directRes = await fetchWithTimeout(
+      targetUrl,
+      { headers: { ...HEADERS, Referer: referer } },
+      8000
+    );
+    if (directRes.ok) return directRes;
+    if (directRes.status !== 403 && directRes.status !== 429) return directRes;
+  } catch (_) {}
+
+  const encoded = encodeURIComponent(targetUrl);
+  const relays = [
+    `https://api.allorigins.win/raw?url=${encoded}`,
+    `https://corsproxy.io/?${encoded}`,
   ];
 
-  let html = "";
-  let activeRef = "https://nhentai.net/";
-  let lastStatus = 403;
-
-  for (const src of sources) {
+  let lastRes = null;
+  for (const relay of relays) {
     try {
       const res = await fetchWithTimeout(
-        src.page,
-        { headers: { ...HEADERS, Referer: src.ref } },
-        8000
+        relay,
+        { headers: { "User-Agent": HEADERS["User-Agent"] } },
+        9000
       );
-      lastStatus = res.status;
-      if (res.ok) {
-        const text = await res.text();
-        if (text.includes("/galleries/")) {
-          html = text;
-          activeRef = src.ref;
-          break;
-        }
-      }
+      if (res.ok) return res;
+      lastRes = res;
     } catch (_) {}
   }
+  return lastRes || new Response("無法連線至目標網頁 (403/429)", { status: 502 });
+}
 
-  if (!html) {
-    throw new Error(`nhentai 所有路線均被限制 (最後狀態碼 ${lastStatus})`);
+// 解析 nhentai（嚴格鎖定官方番號與主縮圖區塊）
+async function parseNhentai(code) {
+  const officialUrl = `https://nhentai.net/g/${code}/`;
+  const res = await fetchTargetPage(officialUrl, "https://nhentai.net/");
+  if (!res.ok) throw new Error(`nhentai 讀取失敗 (${res.status})`);
+  const html = await res.text();
+
+  // 驗證頁面確實屬於該番號
+  if (!html.includes(`/g/${code}/`) && !html.includes(`#${code}`)) {
+    throw new Error(`回傳頁面與番號 ${code} 不符（可能觸發驗證頁）`);
   }
 
-  // 多層書名提取
+  // 提取書名（優先取日文副標題 h2，其次主標題 h1 或 og:title）
+  const h2Match = html.match(/<h2[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/h2>/i);
+  const h1Match = html.match(/<h1[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/h1>/i);
   const ogMatch =
     html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
     html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
-  const h2Match = html.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
-  const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-  const pageTitleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
 
   let title = "";
-  if (ogMatch && ogMatch[1].trim()) title = ogMatch[1];
-  else if (h2Match && h2Match[1].replace(/<[^>]+>/g, "").trim()) title = h2Match[1];
+  if (h2Match && h2Match[1].replace(/<[^>]+>/g, "").trim()) title = h2Match[1];
   else if (h1Match && h1Match[1].replace(/<[^>]+>/g, "").trim()) title = h1Match[1];
-  else if (pageTitleMatch) title = pageTitleMatch[1];
+  else if (ogMatch && ogMatch[1].trim()) title = ogMatch[1];
   else title = code;
 
   title = title.replace(/\s*[-|]\s*nhentai.*$/i, "").trim() || code;
@@ -96,60 +103,58 @@ async function parseNhentai(code) {
   const servers = ["https://i.nhentai.net", "https://i2.nhentai.net", "https://i3.nhentai.net"];
   const urls = [];
 
-  // 優先嘗試解析內嵌 JSON
+  // 1. 優先解析內嵌 _gallery JSON
   const jsonMatch = html.match(/window\._gallery\s*=\s*JSON\.parse\((['"])(.+?)\1\)/);
   if (jsonMatch) {
     try {
       const raw = jsonMatch[1] === "'" ? jsonMatch[2].replace(/\\'/g, "'") : JSON.parse(`"${jsonMatch[2]}"`);
       const data = JSON.parse(raw);
-      title = (data.title && (data.title.japanese || data.title.english || data.title.pretty)) || title;
-      const pages = (data.images && data.images.pages) || [];
-      pages.forEach((p, idx) => {
-        const ext = extMap[p.t] || "jpg";
-        urls.push(`${servers[idx % servers.length]}/galleries/${data.media_id}/${idx + 1}.${ext}`);
-      });
+      if (String(data.id) === String(code)) {
+        title = (data.title && (data.title.japanese || data.title.english || data.title.pretty)) || title;
+        const pages = (data.images && data.images.pages) || [];
+        pages.forEach((p, idx) => {
+          const ext = extMap[p.t] || "jpg";
+          urls.push(`${servers[idx % servers.length]}/galleries/${data.media_id}/${idx + 1}.${ext}`);
+        });
+      }
     } catch (_) {}
   }
 
-  // 從縮圖網址還原原圖清單（兼容主站與所有鏡像站格式）
+  // 2. 後備：只截取 #thumbnail-container 至 #related-container 之間嘅主縮圖，絕不掃描底部推薦區
   if (urls.length === 0) {
-    const thumbRegex = /(?:data-src|src)=["']((?:https?:)?\/\/[^"']+\/galleries\/(\d+)\/(\d+)t\.(jpg|png|gif|webp))["']/gi;
+    const startIdx = html.indexOf('id="thumbnail-container"');
+    const endIdx = html.indexOf('id="related-container"');
+    const mainSection =
+      startIdx !== -1
+        ? html.slice(startIdx, endIdx > startIdx ? endIdx : startIdx + 150000)
+        : "";
+
+    const thumbRegex = /\/galleries\/(\d+)\/(\d+)t\.(jpg|png|gif|webp)/gi;
     let m;
+    let lockedMediaId = null;
     const seenPages = new Set();
-    while ((m = thumbRegex.exec(html)) !== null) {
-      let fullThumb = m[1];
-      if (fullThumb.startsWith("//")) fullThumb = "https:" + fullThumb;
-      const mediaId = m[2];
-      const pageNum = m[3];
-      const ext = m[4];
+
+    while ((m = thumbRegex.exec(mainSection)) !== null) {
+      const mediaId = m[1];
+      const pageNum = m[2];
+      const ext = m[3];
+
+      if (!lockedMediaId) lockedMediaId = mediaId;
+      if (mediaId !== lockedMediaId) continue; // 鎖定單一 media_id，防止混入其他作品
       if (seenPages.has(pageNum)) continue;
       seenPages.add(pageNum);
 
-      // 將鏡像站縮圖轉為對應原圖網址（例如 t3.nhentai.xxx/1t.jpg -> i3.nhentai.xxx/1.jpg）
-      const mirrorFull = fullThumb
-        .replace(/\/\/t(\d*\.)/i, "//i$1")
-        .replace(/(\/\d+)t\.(jpg|png|gif|webp)$/i, "$1.$2");
-
-      // 若是 i.nhentai.net 則輪流分散負載，否則直接用鏡像站高速 CDN
-      if (mirrorFull.includes("nhentai.net")) {
-        urls.push(`${servers[urls.length % servers.length]}/galleries/${mediaId}/${pageNum}.${ext}`);
-      } else {
-        urls.push(mirrorFull);
-      }
+      urls.push(`${servers[urls.length % servers.length]}/galleries/${mediaId}/${pageNum}.${ext}`);
     }
   }
 
-  if (urls.length === 0) throw new Error("無法從頁面解析出圖片列表");
-  return { title: sanitize(title), urls, referer: activeRef };
+  if (urls.length === 0) throw new Error(`無法從番號 ${code} 主縮圖區解析圖片`);
+  return { title: sanitize(title), urls, referer: "https://nhentai.net/" };
 }
 
 // 解析 MyReadingManga
 async function parseMRM(url) {
-  const res = await fetchWithTimeout(
-    url,
-    { headers: { ...HEADERS, Referer: "https://myreadingmanga.info/" } },
-    10000
-  );
+  const res = await fetchTargetPage(url, "https://myreadingmanga.info/");
   if (!res.ok) throw new Error(`MyReadingManga 讀取失敗 (${res.status})`);
   const html = await res.text();
   const h1Match = html.match(/<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([\s\S]*?)<\/h1>/i);
@@ -170,7 +175,7 @@ async function parseMRM(url) {
       if (!urls.includes(src)) urls.push(src);
     }
   }
-  if (urls.length === 0) throw new Error("找不到 MyReadingManga 圖片（可能受防護盾阻擋）");
+  if (urls.length === 0) throw new Error("找不到 MyReadingManga 圖片");
   return { title: sanitize(title), urls, referer: url };
 }
 
@@ -222,7 +227,7 @@ export default {
         let data;
         if (/^\d+$/.test(q)) {
           data = await parseNhentai(q);
-        } else if (q.includes("nhentai") && /\/g\/(\d+)/.test(q)) {
+        } else if (q.includes("nhentai.net/g/") && /\/g\/(\d+)/.test(q)) {
           const m = q.match(/\/g\/(\d+)/);
           data = await parseNhentai(m[1]);
         } else if (q.includes("myreadingmanga.info")) {
@@ -267,24 +272,7 @@ export default {
         return new Response(imgRes.body, { status: imgRes.status, headers: newHeaders });
       }
 
-      // 下載單張原圖（若鏡像站失敗，自動嘗試官方圖片節點備援）
-      let imgRes = await fetchWithTimeout(
-        targetUrl,
-        { headers: { ...HEADERS, Referer: referer } },
-        10000
-      );
-
-      if (!imgRes.ok && targetUrl.includes("/galleries/")) {
-        const gMatch = targetUrl.match(/\/galleries\/(\d+\/\d+\.(?:jpg|png|gif|webp))/i);
-        if (gMatch) {
-          imgRes = await fetchWithTimeout(
-            `https://i.nhentai.net/galleries/${gMatch[1]}`,
-            { headers: { ...HEADERS, Referer: "https://nhentai.net/" } },
-            10000
-          );
-        }
-      }
-
+      const imgRes = await fetchTargetPage(targetUrl, referer);
       const newHeaders = new Headers(imgRes.headers);
       Object.entries(CORS).forEach(([k, v]) => newHeaders.set(k, v));
       return new Response(imgRes.body, { status: imgRes.status, headers: newHeaders });
