@@ -5,38 +5,42 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>番號轉 PDF</title>
+    <title>全能漫畫轉 PDF</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #121212; color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 16px; box-sizing: border-box; }
-        .card { background: #1e1e1e; padding: 1.8rem; border-radius: 16px; width: 100%; max-width: 400px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.2rem; }
+        .card { background: #1e1e1e; padding: 1.8rem; border-radius: 16px; width: 100%; max-width: 420px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
         h2 { margin: 0; font-size: 1.3rem; }
-        .gear-btn { background: #2c2c2c; border: none; color: #fff; padding: 8px 12px; border-radius: 8px; font-size: 0.9rem; cursor: pointer; }
-        input { width: 100%; padding: 14px; font-size: 1.1rem; border-radius: 10px; border: 1px solid #333; background: #2c2c2c; color: #fff; box-sizing: border-box; margin-bottom: 1rem; }
-        input[type="number"] { font-size: 1.3rem; text-align: center; letter-spacing: 2px; }
-        button.primary { width: 100%; padding: 14px; font-size: 1.05rem; font-weight: bold; border-radius: 10px; border: none; background: #ed2553; color: white; cursor: pointer; }
-        button.primary:disabled { background: #555; }
-        #status { margin-top: 1rem; font-size: 0.9rem; color: #aaa; text-align: center; min-height: 1.4rem; line-height: 1.5; word-break: break-word; white-space: pre-line; }
+        .gear-btn { background: #2c2c2c; border: none; color: #fff; padding: 8px 12px; border-radius: 8px; font-size: 0.85rem; cursor: pointer; }
+        .guide { background: #262626; padding: 1rem; border-radius: 12px; font-size: 0.85rem; color: #ccc; line-height: 1.6; margin-bottom: 1rem; border: 1px solid #333; }
+        button.primary { width: 100%; padding: 14px; font-size: 1rem; font-weight: bold; border-radius: 10px; border: none; background: #ed2553; color: white; cursor: pointer; }
+        #status { margin-top: 1rem; font-size: 0.9rem; color: #bbb; text-align: center; min-height: 1.4rem; line-height: 1.5; word-break: break-word; white-space: pre-line; }
         #result-box { display: none; margin-top: 1.2rem; padding: 1rem; background: #262626; border-radius: 12px; border: 1px solid #383838; }
         .book-title { font-size: 0.95rem; font-weight: bold; color: #fff; margin-bottom: 0.9rem; line-height: 1.4; word-break: break-word; }
         .dl-btn { width: 100%; padding: 12px; font-size: 1rem; font-weight: bold; border-radius: 10px; border: none; color: #fff; cursor: pointer; margin-bottom: 0.6rem; display: flex; justify-content: center; align-items: center; gap: 6px; }
         .dl-pdf { background: #2ea043; }
         .dl-png { background: #1f6feb; margin-bottom: 0; }
         #settings-panel { display: none; margin-top: 1.2rem; padding-top: 1.2rem; border-top: 1px solid #333; }
+        input { width: 100%; padding: 12px; font-size: 0.95rem; border-radius: 10px; border: 1px solid #333; background: #2c2c2c; color: #fff; box-sizing: border-box; margin-bottom: 0.8rem; }
         label { display: block; font-size: 0.85rem; color: #bbb; margin-bottom: 6px; }
     </style>
 </head>
 <body>
     <div class="card">
         <div class="header">
-            <h2>番號轉 PDF 工具</h2>
+            <h2>全能漫畫轉 PDF</h2>
             <button class="gear-btn" onclick="toggleSettings()">⚙️ 設定中轉站</button>
         </div>
 
-        <input type="number" id="code" placeholder="輸入番號 (例如 697515)" inputmode="numeric">
-        <button class="primary" id="btn" onclick="startProcess()">開始讀取並製作檔案</button>
-        <div id="status">準備就緒，請輸入番號</div>
+        <div class="guide">
+            <strong>使用方法（免受 403/429 限制）：</strong><br>
+            1. 按下方按鈕複製「一鍵抓圖書籤代碼」並存成 Safari 書籤。<br>
+            2. 在 Safari 打開 <b>nhentai / E-Hentai / MyReadingManga</b> 作品頁，點一下該書籤即自動跳轉並合成 PDF！
+        </div>
+
+        <button class="primary" onclick="copyBookmarklet()">📋 一鍵複製 Safari 書籤代碼</button>
+        <div id="status">等待接收作品資料...</div>
 
         <div id="result-box">
             <div class="book-title" id="display-title"></div>
@@ -53,16 +57,37 @@
 
     <script>
         const DEFAULT_WORKER = "https://tight-brook-0a4c.zeldris12313.workers.dev";
-        const EXT_MAP = { j: 'jpg', p: 'png', g: 'gif', w: 'webp' };
-        const IMG_SERVERS = ['https://i.nhentai.net', 'https://i2.nhentai.net', 'https://i3.nhentai.net'];
+        const NH_SERVERS = ['https://i.nhentai.net', 'https://i2.nhentai.net', 'https://i3.nhentai.net'];
         let readyFiles = { pdf: null, png: null };
         let wakeLock = null;
+
+        // 支援 nhentai / E-Hentai / MyReadingManga 的三合一書籤腳本
+        const BOOKMARKLET_CODE = `javascript:(async()=>{const h=location.hostname,u='https://zeldris12313.github.io/pdf-reader/';const go=(d)=>{location.href=u+'#d='+encodeURIComponent(JSON.stringify(d))};if(h.includes('nhentai')){const t=(document.querySelector('h2.title')||document.querySelector('h1.title')||{innerText:document.title}).innerText;const imgs=[...document.querySelectorAll('#thumbnail-container img')];const urls=[];let mid=null;imgs.forEach(i=>{const s=i.dataset.src||i.src||'';const m=s.match(/\\/galleries\\/(\\d+)\\/(\\d+)t\\.(jpg|png|gif|webp)/i);if(m){if(!mid)mid=m[1];if(m[1]===mid)urls.push('https://i.nhentai.net/galleries/'+m[1]+'/'+m[2]+'.'+m[3])}});if(!urls.length)return alert('找不到圖片，請先進入作品介紹頁');go({title:t,urls})}else if(h.includes('myreadingmanga')){const t=(document.querySelector('h1.entry-title')||{innerText:document.title}).innerText;const urls=[...new Set([...document.querySelectorAll('.entry-content img')].map(i=>i.dataset.src||i.dataset.lazySrc||i.src).filter(s=>s&&s.startsWith('http')&&!/avatar|logo|icon|blank\\.gif/i.test(s)))];if(!urls.length)return alert('找不到圖片');go({title:t,urls})}else if(h.includes('e-hentai')||h.includes('exhentai')){const t=(document.querySelector('#gj')||document.querySelector('#gn')||{innerText:document.title}).innerText;const box=document.createElement('div');box.style='position:fixed;top:12px;left:12px;right:12px;z-index:999999;background:#ed2553;color:#fff;padding:14px;border-radius:12px;font-size:15px;font-weight:bold;text-align:center;box-shadow:0 4px 12px rgba(0,0,0,.5)';document.body.appendChild(box);const base=location.href.split('?')[0];let maxP=0;[...document.body.innerHTML.matchAll(/\\?p=(\\d+)/g)].forEach(m=>maxP=Math.max(maxP,+m[1]));const links=[];for(let p=0;p<=maxP;p++){box.innerText='掃描目錄頁 '+(p+1)+'/'+(maxP+1)+'...';const html=p===0?document.body.innerHTML:await(await fetch(base+'?p='+p)).text();[...html.matchAll(/https:\\/\\/e[x-]hentai\\.org\\/s\\/[a-z0-9]+\\/\\d+-\\d+/gi)].forEach(m=>{if(!links.includes(m[0]))links.push(m[0])})}const urls=[];for(let i=0;i<links.length;i++){box.innerText='解析原圖 '+(i+1)+'/'+links.length+'...';const html=await(await fetch(links[i])).text();const m=html.match(/<img id="img"[^>]+src="([^"]+)"/i);if(m)urls.push(m[1])}box.remove();if(!urls.length)return alert('找不到原圖');go({title:t,urls})}else{alert('請在 nhentai、E-Hentai 或 MyReadingManga 作品頁面按此書籤')}})();`;
 
         window.onload = () => {
             const saved = localStorage.getItem('worker_url') || DEFAULT_WORKER;
             localStorage.setItem('worker_url', saved);
             document.getElementById('worker-url').value = saved;
+
+            if (location.hash.startsWith('#d=')) {
+                try {
+                    const payload = JSON.parse(decodeURIComponent(location.hash.slice(3)));
+                    history.replaceState(null, '', location.pathname);
+                    buildPdfFromPayload(payload);
+                } catch (e) {
+                    document.getElementById('status').innerText = '❌ 資料解析失敗：' + e.message;
+                }
+            }
         };
+
+        async function copyBookmarklet() {
+            try {
+                await navigator.clipboard.writeText(BOOKMARKLET_CODE);
+                alert('✅ 已複製書籤代碼！\n\n接下來請在 Safari 將任意網頁「加入書籤」，然後按「編輯」把網址列換成剛複製的代碼即可。');
+            } catch (_) {
+                prompt('請全選複製以下代碼並存成 Safari 書籤網址：', BOOKMARKLET_CODE);
+            }
+        }
 
         function toggleSettings() {
             const p = document.getElementById('settings-panel');
@@ -79,97 +104,15 @@
         }
 
         function sanitizeFilename(name) {
-            const txt = document.createElement('textarea');
-            txt.innerHTML = name || '';
-            return txt.value
-                .replace(/<[^>]+>/g, '')
+            return (name || 'manga')
                 .replace(/[\/\\?%*:|"<>]/g, '_')
                 .replace(/\s+/g, ' ')
                 .trim()
-                .slice(0, 110);
+                .slice(0, 110) || 'manga';
         }
 
         async function requestWakeLock() {
             try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
-        }
-
-        // 多路線讀取網頁 HTML（避開單一 IP 403/429 限制）
-        async function fetchHtmlSmart(targetUrl, workerUrl) {
-            const encoded = encodeURIComponent(targetUrl);
-            const routes = [
-                `${workerUrl}?url=${encoded}`,
-                `https://api.allorigins.win/raw?url=${encoded}`,
-                `https://corsproxy.io/?${encoded}`,
-                `https://api.codetabs.com/v1/proxy?quest=${encoded}`
-            ];
-
-            for (const route of routes) {
-                try {
-                    const controller = new AbortController();
-                    const timer = setTimeout(() => controller.abort(), 8000);
-                    const res = await fetch(route, { signal: controller.signal });
-                    clearTimeout(timer);
-                    if (res.ok) {
-                        const text = await res.text();
-                        if (text.includes('/galleries/')) return text;
-                    }
-                } catch (_) {}
-            }
-            throw new Error('無法讀取作品頁面（所有節點均被限制）');
-        }
-
-        // 從官方頁面 HTML 抽出完整書名與主縮圖區原圖網址
-        function parseGalleryHtml(html, code) {
-            const doc = new DOMParser().parseFromString(html, 'text/html');
-
-            // 1. 提取書名（優先取日文 h2，其次 h1 或 og:title）
-            const h2 = doc.querySelector('h2.title');
-            const h1 = doc.querySelector('h1.title');
-            const og = doc.querySelector('meta[property="og:title"]');
-            let title = (h2 && h2.textContent.trim())
-                     || (h1 && h1.textContent.trim())
-                     || (og && og.getAttribute('content'))
-                     || code;
-
-            // 2. 優先解析內嵌 JSON
-            const jsonMatch = html.match(/window\._gallery\s*=\s*JSON\.parse\((['"])(.+?)\1\)/);
-            if (jsonMatch) {
-                try {
-                    const raw = jsonMatch[1] === "'" ? jsonMatch[2].replace(/\\'/g, "'") : JSON.parse(`"${jsonMatch[2]}"`);
-                    const data = JSON.parse(raw);
-                    if (String(data.id) === String(code)) {
-                        title = (data.title && (data.title.japanese || data.title.english || data.title.pretty)) || title;
-                        const pages = (data.images && data.images.pages) || [];
-                        if (pages.length > 0) {
-                            const urls = pages.map((p, idx) => {
-                                const ext = EXT_MAP[p.t] || 'jpg';
-                                return `${IMG_SERVERS[idx % IMG_SERVERS.length]}/galleries/${data.media_id}/${idx + 1}.${ext}`;
-                            });
-                            return { title: sanitizeFilename(title) || code, urls };
-                        }
-                    }
-                } catch (_) {}
-            }
-
-            // 3. 後備：只抓主縮圖區 #thumbnail-container（絕不抓底部推薦區）
-            const thumbs = doc.querySelectorAll('#thumbnail-container img');
-            const urls = [];
-            let lockedMediaId = null;
-
-            thumbs.forEach((img) => {
-                const src = img.getAttribute('data-src') || img.getAttribute('src') || '';
-                const m = src.match(/\/galleries\/(\d+)\/(\d+)t\.(jpg|png|gif|webp)/i);
-                if (m) {
-                    if (!lockedMediaId) lockedMediaId = m[1];
-                    if (m[1] === lockedMediaId) {
-                        const server = IMG_SERVERS[urls.length % IMG_SERVERS.length];
-                        urls.push(`${server}/galleries/${m[1]}/${m[2]}.${m[3]}`);
-                    }
-                }
-            });
-
-            if (urls.length === 0) throw new Error('找不到該番號的圖片列表');
-            return { title: sanitizeFilename(title) || code, urls };
         }
 
         function processImageBlob(blob, isCover) {
@@ -218,35 +161,35 @@
             setTimeout(() => URL.revokeObjectURL(url), 5000);
         }
 
-        async function startProcess() {
+        async function buildPdfFromPayload(payload) {
             const workerUrl = localStorage.getItem('worker_url') || DEFAULT_WORKER;
-            const code = document.getElementById('code').value.trim();
-            if (!code) return alert('請輸入番號');
+            const title = sanitizeFilename(payload.title);
+            const urls = payload.urls || [];
+            const total = urls.length;
+            if (!total) return;
 
-            const btn = document.getElementById('btn');
             const status = document.getElementById('status');
             const resultBox = document.getElementById('result-box');
-
-            btn.disabled = true;
             resultBox.style.display = 'none';
             readyFiles = { pdf: null, png: null };
-            status.innerText = '1/3 正在讀取作品資料與書名...';
             await requestWakeLock();
 
             try {
-                const html = await fetchHtmlSmart(`https://nhentai.net/g/${code}/`, workerUrl);
-                const { title, urls } = parseGalleryHtml(html, code);
-                const total = urls.length;
-
                 const { jsPDF } = window.jspdf;
                 let pdf = null;
                 let coverPngBlob = null;
 
                 for (let i = 0; i < total; i++) {
                     const pageNum = i + 1;
-                    status.innerText = `2/3 《${title}》\n正在下載原圖 (${pageNum} / ${total} 頁)...`;
+                    status.innerText = `《${title}》\n正在下載原圖 (${pageNum} / ${total} 頁)...`;
 
-                    const imgRes = await fetch(`${workerUrl}?url=${encodeURIComponent(urls[i])}`);
+                    // 若為 nhentai 圖片則輪流分散至 i / i2 / i3 伺服器加速下載
+                    let targetImg = urls[i];
+                    if (targetImg.includes('i.nhentai.net')) {
+                        targetImg = targetImg.replace('https://i.nhentai.net', NH_SERVERS[i % NH_SERVERS.length]);
+                    }
+
+                    const imgRes = await fetch(`${workerUrl}?url=${encodeURIComponent(targetImg)}`);
                     if (!imgRes.ok) throw new Error(`第 ${pageNum} 頁下載失敗 (${imgRes.status})`);
 
                     const blob = await imgRes.blob();
@@ -263,7 +206,7 @@
                     pdf.addImage(imgInfo.dataUrl, 'JPEG', 0, 0, imgInfo.width, imgInfo.height);
                 }
 
-                status.innerText = '3/3 正在打包檔案...';
+                status.innerText = '正在打包檔案...';
                 readyFiles.pdf = { blob: pdf.output('blob'), filename: `${title}.pdf`, mime: 'application/pdf' };
                 if (coverPngBlob) {
                     readyFiles.png = { blob: coverPngBlob, filename: `${title}_封面.png`, mime: 'image/png' };
@@ -275,7 +218,6 @@
             } catch (err) {
                 status.innerText = `❌ 錯誤：${err.message}`;
             } finally {
-                btn.disabled = false;
                 if (wakeLock) { wakeLock.release(); wakeLock = null; }
             }
         }
