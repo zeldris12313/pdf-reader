@@ -11,7 +11,8 @@
         body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #121212; color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 16px; box-sizing: border-box; }
         .card { background: #1e1e1e; padding: 1.8rem; border-radius: 16px; width: 100%; max-width: 420px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
         .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem; }
-        h2 { margin: 0; font-size: 1.3rem; }
+        h2 { margin: 0; font-size: 1.25rem; }
+        .ver { font-size: 0.75rem; background: #2ea043; color: #fff; padding: 2px 6px; border-radius: 6px; vertical-align: middle; margin-left: 4px; }
         .sub { font-size: 0.8rem; color: #888; margin-bottom: 1.2rem; line-height: 1.4; }
         .gear-btn { background: #2c2c2c; border: none; color: #fff; padding: 8px 12px; border-radius: 8px; font-size: 0.85rem; cursor: pointer; }
         input { width: 100%; padding: 14px; font-size: 1rem; border-radius: 10px; border: 1px solid #333; background: #2c2c2c; color: #fff; box-sizing: border-box; margin-bottom: 1rem; }
@@ -30,7 +31,7 @@
 <body>
     <div class="card">
         <div class="header">
-            <h2>全能漫畫轉 PDF</h2>
+            <h2>全能漫畫轉 PDF <span class="ver">v3.0</span></h2>
             <button class="gear-btn" onclick="toggleSettings()">⚙️ 設定中轉站</button>
         </div>
         <div class="sub">支援：nhentai 番號 / MyReadingManga / E-Hentai 網址</div>
@@ -58,8 +59,23 @@
         let wakeLock = null;
         let isRunning = false;
 
+        // 白名單過濾，徹底清除隱藏字元、引號與非法格式
+        function cleanWorkerUrl(raw) {
+            let u = (raw || "").replace(/[^a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]/g, "");
+            u = u.replace(/^["']+|["']+$/g, "");
+            if (!u) return DEFAULT_WORKER;
+            if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+            u = u.replace(/\/+$/, "");
+            try {
+                new URL(u);
+                return u;
+            } catch (_) {
+                return DEFAULT_WORKER;
+            }
+        }
+
         window.onload = () => {
-            const saved = localStorage.getItem('worker_url') || DEFAULT_WORKER;
+            const saved = cleanWorkerUrl(localStorage.getItem('worker_url'));
             localStorage.setItem('worker_url', saved);
             document.getElementById('worker-url').value = saved;
         };
@@ -70,11 +86,10 @@
         }
 
         function saveSettings() {
-            let url = document.getElementById('worker-url').value.trim();
-            if (url && !url.startsWith('http')) url = 'https://' + url;
-            if (url.endsWith('/')) url = url.slice(0, -1);
-            localStorage.setItem('worker_url', url);
-            alert('✅ 已儲存！');
+            const cleaned = cleanWorkerUrl(document.getElementById('worker-url').value);
+            localStorage.setItem('worker_url', cleaned);
+            document.getElementById('worker-url').value = cleaned;
+            alert('✅ 已儲存網址：\n' + cleaned);
             document.getElementById('settings-panel').style.display = 'none';
         }
 
@@ -106,7 +121,7 @@
                         resolve(baseResult);
                     }
                 };
-                img.onerror = () => reject(new Error('圖片解碼失敗'));
+                img.onerror = () => reject(new Error('圖片解碼失敗（中轉站回傳了非圖片內容）'));
                 img.src = url;
             });
         }
@@ -130,7 +145,7 @@
 
         async function startProcess() {
             if (isRunning) return;
-            const workerUrl = localStorage.getItem('worker_url') || DEFAULT_WORKER;
+            const workerUrl = cleanWorkerUrl(localStorage.getItem('worker_url'));
             const query = document.getElementById('query').value.trim();
             if (!query) return alert('請輸入番號或網址');
 
@@ -139,13 +154,17 @@
             isRunning = true;
             btn.disabled = true;
             document.getElementById('result-box').style.display = 'none';
-            status.innerText = '1/3 正在識別網站並讀取目錄（最多 10 秒）...';
             await requestWakeLock();
 
+            let currentStep = '1. 連線中轉站解析目錄';
+
             try {
+                const parseEndpoint = `${workerUrl}/api/parse`;
+                status.innerText = `1/3 正在連線中轉站解析目錄...\n(${workerUrl})`;
+
                 const controller = new AbortController();
                 const timer = setTimeout(() => controller.abort(), 15000);
-                const res = await fetch(`${workerUrl}/api/parse`, {
+                const res = await fetch(parseEndpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ query }),
@@ -153,7 +172,15 @@
                 });
                 clearTimeout(timer);
 
-                const data = await res.json();
+                currentStep = '2. 讀取中轉站回傳資料';
+                const rawText = await res.text();
+                let data = null;
+                try {
+                    data = JSON.parse(rawText);
+                } catch (_) {
+                    throw new Error(`後端回應非 JSON (狀態碼 ${res.status})：\n${rawText.slice(0, 100)}`);
+                }
+
                 if (!res.ok || !data.ok) {
                     throw new Error(data.error || `讀取失敗 (${res.status})`);
                 }
@@ -166,7 +193,9 @@
 
                 for (let i = 0; i < total; i++) {
                     const pageNum = i + 1;
+                    currentStep = `3. 下載並處理第 ${pageNum}/${total} 頁`;
                     status.innerText = `2/3 《${title}》\n正在下載原圖 (${pageNum} / ${total} 頁)...`;
+
                     const imgUrl = `${workerUrl}?url=${encodeURIComponent(urls[i])}&ref=${encodeURIComponent(referer)}`;
                     const imgRes = await fetch(imgUrl);
                     if (!imgRes.ok) throw new Error(`第 ${pageNum} 頁下載失敗 (${imgRes.status})`);
@@ -185,6 +214,7 @@
                     pdf.addImage(imgInfo.dataUrl, 'JPEG', 0, 0, imgInfo.width, imgInfo.height);
                 }
 
+                currentStep = '4. 打包最終檔案';
                 status.innerText = '3/3 正在打包檔案...';
                 readyFiles.pdf = { blob: pdf.output('blob'), filename: `${title}.pdf`, mime: 'application/pdf' };
                 if (coverPngBlob) {
@@ -195,8 +225,8 @@
                 document.getElementById('result-box').style.display = 'block';
                 status.innerText = '✅ 製作完成！請按下方按鈕儲存：';
             } catch (err) {
-                const msg = err.name === 'AbortError' ? '連線超時（超過 15 秒未回應），請重試' : err.message;
-                status.innerText = `❌ 錯誤：${msg}`;
+                const msg = err.name === 'AbortError' ? '連線超時（超過 15 秒未回應）' : err.message;
+                status.innerText = `❌ 錯誤 [卡在：${currentStep}]：\n${msg}`;
             } finally {
                 isRunning = false;
                 btn.disabled = false;
